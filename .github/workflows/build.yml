@@ -16,8 +16,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt pyinstaller
+      - shell: python
+        run: |
+          import os, datetime
+          stamp = "%s (%s)" % (os.environ["GITHUB_RUN_NUMBER"], datetime.date.today().strftime("%d.%m.%Y"))
+          open("build_info.py", "w").write("BUILD = %r\n" % stamp)
       - run: python shotfile.py --make-icon
-      - run: pyinstaller --noconfirm --onefile --windowed --name ShotFile --icon icon.ico shotfile.py
+      - run: pyinstaller --noconfirm --onefile --windowed --hidden-import pystray._win32 --name ShotFile --icon icon.ico shotfile.py
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
