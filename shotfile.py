@@ -10,7 +10,8 @@ from datetime import datetime
 from pathlib import Path
 
 APP = "ShotFile"
-VERSION = "1.0"
+VERSION = "1.0.0"
+BUILD = "20261024.2"
 TON_ADDRESS = "UQAbta5Av9SF3M4SlLTht530Ujth_SWotOpEx3A7cLCf8JxR"
 APPDATA = Path(os.environ.get("APPDATA", str(Path.home()))) / APP
 CONFIG_PATH = APPDATA / "config.json"
@@ -24,6 +25,7 @@ DEFAULTS = {
     "autostart": False,
     "start_minimized": False,
     "watch_hotkey": True,
+    "gaming_mode": True,
 }
 
 
@@ -313,6 +315,9 @@ class ShotFile:
         self.settings_win = None
         self.popup_win = None
         self.toast_win = None
+        self.game_active = False
+        self.game_shots = []
+        self.game_last_check = 0.0
 
         self.support_win = None
         self.root = tk.Tk()
@@ -350,6 +355,35 @@ class ShotFile:
         x = (win.winfo_screenwidth() - w) // 2
         y = max(20, (win.winfo_screenheight() - h) // 2 - 20)
         win.geometry("%dx%d+%d+%d" % (w, h, x, y))
+        self.apply_rounding(win)
+        if not getattr(win, "_shotfile_rounding_bound", False):
+            win.bind("<Configure>", lambda event, target=win: self.apply_rounding(target) if event.widget is target else None, add="+")
+            win._shotfile_rounding_bound = True
+
+    def apply_rounding(self, win):
+        try:
+            import ctypes
+            from ctypes import wintypes
+            win.update_idletasks()
+            hwnd = win.winfo_id()
+            width = win.winfo_width()
+            height = win.winfo_height()
+            if width < 2 or height < 2:
+                return
+            dimensions = (width, height)
+            if getattr(win, "_shotfile_rounding_size", None) == dimensions:
+                return
+            gdi32 = ctypes.windll.gdi32
+            user32 = ctypes.windll.user32
+            radius = 24
+            region = gdi32.CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2)
+            if region:
+                if user32.SetWindowRgn(hwnd, region, True):
+                    win._shotfile_rounding_size = dimensions
+                else:
+                    gdi32.DeleteObject(region)
+        except Exception:
+            pass
 
 
     def chrome(self, win, title, close, minimize=None):
@@ -452,7 +486,9 @@ class ShotFile:
         self.vals["folder"].config(text=short)
         self.vals["format"].config(text=str(c["format"]).upper())
         self.vals["template"].config(text=c["template"])
-        if c["watch_hotkey"] and self.has_hotkey:
+        if self.game_active:
+            self.status_sub.config(text="Игровой режим активен · уведомления скрыты")
+        elif c["watch_hotkey"] and self.has_hotkey:
             self.status_sub.config(text="Ожидает сочетание клавиш Win + Shift + S")
         else:
             self.status_sub.config(text="Следит за буфером обмена")
@@ -542,6 +578,7 @@ class ShotFile:
             "format": tk.StringVar(master=w, value=str(c["format"]).upper()),
             "template": tk.StringVar(master=w, value=c["template"]),
             "notify": tk.BooleanVar(master=w, value=c["notify"]),
+            "gaming_mode": tk.BooleanVar(master=w, value=c.get("gaming_mode", True)),
         }
 
         side = tk.Frame(body, bg=BG_SIDE, width=210)
@@ -606,6 +643,7 @@ class ShotFile:
         self.toggle_row(g, G_AUTO, "Запускать вместе с Windows", v["autostart"])
         self.toggle_row(g, G_TRAY, "Запускать свёрнутым в трей", v["start_minimized"])
         self.toggle_row(g, G_KEYS, "Отслеживать сочетание клавиш Win + Shift + S", v["watch_hotkey"])
+        self.toggle_row(g, G_BOLT, "Игровой режим: скрывать уведомления во время игры", v["gaming_mode"])
         info = tk.Frame(g, bg=PANEL)
         info.pack(fill="x", pady=(6, 0))
         icon_label(info, G_INFO, PANEL, ACCENT_SOFT, 12).pack(side="left", anchor="n", padx=(0, 12))
@@ -655,8 +693,8 @@ class ShotFile:
         self.toggle_row(s, G_BELL, "Уведомлять после сохранения", v["notify"])
 
         a = self.section(parent, "about", "О программе")
-        tk.Label(a, text="%s %s" % (APP, VERSION), bg=PANEL, fg=FG, font=(FONT, 12, "bold"), anchor="w").pack(fill="x")
-        tk.Label(a, text="Скриншотнул — сохранил.\nНастройки хранятся в:\n%s" % CONFIG_PATH, bg=PANEL, fg=MUTED, font=(FONT, 9),
+        tk.Label(a, text="%s · версия %s" % (APP, VERSION), bg=PANEL, fg=FG, font=(FONT, 12, "bold"), anchor="w").pack(fill="x")
+        tk.Label(a, text="Сборка: %s\nСкриншотнул — сохранил.\nНастройки хранятся в:\n%s" % (BUILD, CONFIG_PATH), bg=PANEL, fg=MUTED, font=(FONT, 9),
                  justify="left", anchor="w", wraplength=520).pack(fill="x", pady=(6, 0))
 
     def settings_show(self, page):
@@ -684,6 +722,7 @@ class ShotFile:
         c["format"] = v["format"].get()
         c["template"] = v["template"].get().strip()
         c["notify"] = bool(v["notify"].get())
+        c["gaming_mode"] = bool(v["gaming_mode"].get())
         save_config(c)
         set_autostart(c["autostart"])
         self.refresh_main()
@@ -799,10 +838,85 @@ class ShotFile:
             self.toast("Скриншот сохранён", ["Файл: %s" % path.name, "Папка: %s" % "/".join(path.parent.parts[-2:])], thumb=img)
 
     def handle_image(self, img):
+        if self.cfg.get("gaming_mode", True) and self.game_active:
+            try:
+                path = save_image(img, self.cfg)
+                self.game_shots.append(path)
+            except Exception as e:
+                self.toast("Не удалось сохранить", [str(e)])
+            return
         if self.cfg["mode"] == "ask":
             self.ask(img)
         else:
             self.save_and_notify(img)
+
+    def detect_game(self):
+        names = {
+            "cs2.exe", "csgo.exe", "valorant-win64-shipping.exe", "valorant.exe", "league of legends.exe",
+            "leagueclient.exe", "dota2.exe", "gta5.exe", "gta5_enhanced.exe", "rdr2.exe", "minecraft.exe",
+            "javaw.exe", "java.exe", "robloxplayerbeta.exe", "fortniteclient-win64-shipping.exe",
+            "eldenring.exe", "eldenring.exe", "overwatch.exe", "overwatch 2.exe", "rocketleague.exe",
+            "apex_legends.exe", "r5apex.exe", "destiny2.exe", "warframe.x64.exe", "standoff2.exe",
+            "osu!.exe", "fallguys_client_game.exe", "among us.exe", "terraria.exe", "left4dead2.exe",
+            "rainbowsix.exe", "rainbowsix_vulkan.exe", "thefinals.exe", "helldivers2.exe", "palworld-win64-shipping.exe"
+        }
+        try:
+            import psutil
+            for proc in psutil.process_iter(["name"]):
+                try:
+                    if (proc.info.get("name") or "").lower() in names:
+                        return True
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            try:
+                import subprocess
+                output = subprocess.check_output(["tasklist", "/FO", "CSV", "/NH"], text=True, errors="ignore", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                for line in output.splitlines():
+                    exe = line.split(",", 1)[0].strip('"').lower()
+                    if exe in names:
+                        return True
+            except Exception:
+                pass
+        return False
+
+    def check_gaming(self):
+        now = time.time()
+        if now - self.game_last_check < 2:
+            return
+        self.game_last_check = now
+        active = bool(self.cfg.get("gaming_mode", True) and self.detect_game())
+        if active and not self.game_active:
+            self.game_active = True
+            self.game_shots = []
+            self.q.put(self.refresh_main)
+        elif not active and self.game_active:
+            self.game_active = False
+            shots = list(self.game_shots)
+            self.game_shots = []
+            self.q.put(self.refresh_main)
+            if shots:
+                self.q.put(lambda items=shots: self.game_summary(items))
+
+    def game_summary(self, shots):
+        if not self.cfg.get("notify", True):
+            return
+        d, card, body, x = self.shell("Игровой режим")
+        self.toast_win = d
+        tk.Label(body, text="Вы вышли из игры!", bg=BG, fg=FG, font=(FONT, 12, "bold"), anchor="w").pack(fill="x")
+        tk.Label(body, text="Во время игры вы сделали %d %s." % (len(shots), plural(len(shots), "скриншот", "скриншота", "скриншотов")), bg=BG, fg="#c5cde0", font=(FONT, 10), anchor="w").pack(fill="x", pady=(6, 12))
+        buttons = tk.Frame(body, bg=BG)
+        buttons.pack(fill="x")
+        def view():
+            d.destroy()
+            try:
+                os.startfile(str(shots[0].parent))
+            except Exception as e:
+                self.toast("Не удалось открыть папку", [str(e)])
+        button(buttons, "Посмотреть", view, primary=True, padx=18, pady=6).pack(side="left")
+        button(buttons, "Пропустить", d.destroy, padx=18, pady=6).pack(side="left", padx=(8, 0))
+        x.bind("<Button-1>", lambda e: d.destroy())
+        self.dock(d)
 
 
     def start_hotkey(self):
@@ -823,6 +937,7 @@ class ShotFile:
         except Exception:
             return
         while self.running:
+            self.check_gaming()
             time.sleep(0.25)
             try:
                 seq = clipboard_seq()
@@ -872,6 +987,7 @@ class ShotFile:
                 I("Автоматически", set_mode("auto"), checked=lambda item: self.cfg["mode"] == "auto", radio=True),
                 I("Спрашивать", set_mode("ask"), checked=lambda item: self.cfg["mode"] == "ask", radio=True),
             )),
+            I("Игровой режим", lambda icon, item: self.toggle_gaming(), checked=lambda item: self.cfg.get("gaming_mode", True)),
             I("Запускать с Windows", toggle_autostart, checked=lambda item: self.cfg["autostart"]),
             M.SEPARATOR,
             I("О программе", ui(lambda: self.open_settings("about"))),
@@ -879,6 +995,15 @@ class ShotFile:
         )
         self.tray = pystray.Icon(APP, self.tray_img, APP, menu)
         self.tray.run_detached()
+
+    def toggle_gaming(self):
+        self.cfg["gaming_mode"] = not self.cfg.get("gaming_mode", True)
+        save_config(self.cfg)
+        self.refresh_main()
+        try:
+            self.tray.update_menu()
+        except Exception:
+            pass
 
     def pump(self):
         try:
