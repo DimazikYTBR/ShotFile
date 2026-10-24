@@ -19,6 +19,8 @@ except ImportError:
 
 APP = "ShotFile"
 VERSION = "1.1"
+AUTHORS = ("dimzoffc", "yorvex")
+TOAST_CHOICES = {"3 секунды": 3, "6 секунд": 6, "10 секунд": 10}
 TON_ADDRESS = "UQAbta5Av9SF3M4SlLTht530Ujth_SWotOpEx3A7cLCf8JxR"
 APPDATA = Path(os.environ.get("APPDATA", str(Path.home()))) / APP
 CONFIG_PATH = APPDATA / "config.json"
@@ -33,6 +35,7 @@ DEFAULTS = {
     "start_minimized": False,
     "watch_hotkey": True,
     "game_mode": True,
+    "toast_seconds": 6,
 }
 
 BG = "#0a1224"
@@ -476,7 +479,7 @@ class ShotFile:
 
     def place(self, win, w, h):
         win.update_idletasks()
-        h = h or win.winfo_reqheight()
+        h = min(h or win.winfo_reqheight(), win.winfo_screenheight() - 80)
         x = (win.winfo_screenwidth() - w) // 2
         y = max(20, (win.winfo_screenheight() - h) // 2 - 20)
         win.geometry("%dx%d+%d+%d" % (w, h, x, y))
@@ -663,8 +666,8 @@ class ShotFile:
 
     NAV = [("general", G_SETTINGS, "Основные"), ("save", G_FOLDER, "Сохранение"), ("mode", G_BOLT, "Режим работы"),
            ("notify", G_BELL, "Уведомления"), ("keys", G_KEYS, "Горячие клавиши"), ("about", G_INFO, "О программе")]
-    PAGES = {"general": ["general", "mode", "save"], "save": ["save"], "mode": ["mode"],
-             "notify": ["save"], "keys": ["general"], "about": ["about"]}
+    PAGES = {"general": ["general"], "save": ["save"], "mode": ["mode"],
+             "notify": ["notify"], "keys": ["keys"], "about": ["about"]}
 
     def open_settings(self, page="general"):
         if self.settings_win is not None and self.settings_win.winfo_exists():
@@ -687,7 +690,9 @@ class ShotFile:
             "format": tk.StringVar(master=w, value=str(c["format"]).upper()),
             "template": tk.StringVar(master=w, value=c["template"]),
             "notify": tk.BooleanVar(master=w, value=c["notify"]),
+            "toast": tk.StringVar(master=w, value=next((k for k, x in TOAST_CHOICES.items() if x == c["toast_seconds"]), "6 секунд")),
         }
+        self.cur_page = page
 
         side = tk.Frame(body, bg=BG_SIDE, width=210)
         side.pack(side="left", fill="y")
@@ -702,6 +707,8 @@ class ShotFile:
             icon_label(it.inner, glyph, BG_SIDE, FG, 13).pack(side="left", padx=(0, 12))
             tk.Label(it.inner, text=label, bg=BG_SIDE, fg=FG, font=(FONT, 10)).pack(side="left")
             bind_tree(it, "<Button-1>", lambda e, k=key: self.settings_show(k))
+            bind_tree(it, "<Enter>", lambda e, k=key, r=it: self.cur_page != k and r.set_fill(BTN))
+            bind_tree(it, "<Leave>", lambda e, k=key, r=it: self.cur_page != k and r.set_fill(BG_SIDE))
             self.nav_items[key] = it
         tk.Label(side, text="Версия %s\nСборка %s" % (VERSION, BUILD), bg=BG_SIDE, fg=MUTED, font=(FONT, 9), justify="left", anchor="w").pack(side="bottom", anchor="w", padx=22, pady=18)
 
@@ -720,7 +727,7 @@ class ShotFile:
         self.build_sections(self.s_content)
         self.settings_show("general")
         w.update_idletasks()
-        self.place(w, 840, max(w.winfo_reqheight(), 600))
+        self.place(w, 840, max(w.winfo_reqheight(), 500))
         self.settings_show(page)
         appwindow(w)
 
@@ -739,17 +746,57 @@ class ShotFile:
         tk.Label(r, text=text, bg=PANEL, fg=FG, font=(FONT, 10)).pack(side="left")
         Toggle(r, var, PANEL).pack(side="right")
 
+    def hint(self, parent, text, glyph=None, pady=(6, 2)):
+        r = tk.Frame(parent, bg=PANEL)
+        r.pack(fill="x", pady=pady)
+        if glyph:
+            icon_label(r, glyph, PANEL, ACCENT_SOFT, 12).pack(side="left", anchor="n", padx=(0, 12))
+        tk.Label(r, text=text, bg=PANEL, fg=MUTED, font=(FONT, 9), justify="left", anchor="w", wraplength=520).pack(side="left", fill="x")
+        return r
+
+    def keycaps(self, parent, keys):
+        r = tk.Frame(parent, bg=PANEL)
+        for i, k in enumerate(keys):
+            if i:
+                tk.Label(r, text="+", bg=PANEL, fg=MUTED, font=(FONT, 10)).pack(side="left", padx=6)
+            cap = Round(r, fill=FIELD, outline=LINE, radius=8, padx=10, pady=5)
+            cap.pack(side="left")
+            tk.Label(cap.inner, text=k, bg=FIELD, fg=FG, font=(FONT, 10, "bold")).pack()
+        return r
+
+    def open_telegram(self, handle):
+        try:
+            os.startfile("tg://resolve?domain=" + handle)
+        except Exception:
+            import webbrowser
+            webbrowser.open("https://t.me/" + handle)
+
+    def author_row(self, parent, handle):
+        row = tk.Frame(parent, bg=PANEL, cursor="hand2")
+        row.pack(fill="x", pady=2)
+        av = tk.Canvas(row, width=36, height=36, bg=PANEL, highlightthickness=0)
+        av.create_oval(1, 1, 35, 35, fill=ACCENT, outline=ACCENT)
+        av.create_text(18, 18, text=handle[0].upper(), fill="#ffffff", font=(FONT, 12, "bold"))
+        av.pack(side="left", padx=(6, 12), pady=6)
+        tk.Label(row, text="@" + handle, bg=PANEL, fg=FG, font=(FONT, 11)).pack(side="left")
+        icon_label(row, G_CHEV, PANEL, MUTED, 9).pack(side="right", padx=(8, 8))
+        tk.Label(row, text="Telegram", bg=PANEL, fg=ACCENT_SOFT, font=(FONT, 10)).pack(side="right")
+
+        def paint(color):
+            set_bg_tree(row, color)
+            av.configure(bg=color)
+
+        bind_tree(row, "<Button-1>", lambda e: self.open_telegram(handle))
+        bind_tree(row, "<Enter>", lambda e: paint(FIELD))
+        bind_tree(row, "<Leave>", lambda e: paint(PANEL))
+
     def build_sections(self, parent):
         v = self.v
         g = self.section(parent, "general", "Основные")
         self.toggle_row(g, G_AUTO, "Запускать вместе с Windows", v["autostart"])
         self.toggle_row(g, G_TRAY, "Запускать свёрнутым в трей", v["start_minimized"])
-        self.toggle_row(g, G_KEYS, "Отслеживать сочетание клавиш Win + Shift + S", v["watch_hotkey"])
-        info = tk.Frame(g, bg=PANEL)
-        info.pack(fill="x", pady=(4, 2))
-        icon_label(info, G_INFO, PANEL, ACCENT_SOFT, 12).pack(side="left", anchor="n", padx=(0, 12))
-        tk.Label(info, text="Приложение будет ждать, пока вы сделаете скриншот\nи Windows поместит его в буфер обмена.", bg=PANEL, fg=MUTED,
-                 font=(FONT, 9), justify="left", anchor="w").pack(side="left")
+        self.toggle_row(g, G_GAME, "Игровой режим", v["game_mode"])
+        self.hint(g, "В полноэкранных играх скриншоты сохраняются молча, без окон и уведомлений. После игры покажется итог.", G_INFO)
 
         m = self.section(parent, "mode", "Режим работы")
         row = tk.Frame(m, bg=PANEL)
@@ -758,7 +805,7 @@ class ShotFile:
         box, cb = self.combo(row, v["mode"], list(MODE_TITLES.values()))
         box.pack(side="left", fill="x", expand=True)
         self.mode_hint = tk.Label(m, bg=PANEL, fg=MUTED, font=(FONT, 9), anchor="w")
-        self.mode_hint.pack(fill="x", pady=(8, 6))
+        self.mode_hint.pack(fill="x", pady=(8, 4))
 
         def upd(*a):
             key = "ask" if v["mode"].get() == MODE_TITLES["ask"] else "auto"
@@ -766,9 +813,6 @@ class ShotFile:
 
         cb.bind("<<ComboboxSelected>>", upd)
         upd()
-        self.toggle_row(m, G_GAME, "Игровой режим", v["game_mode"])
-        tk.Label(m, text="В полноэкранных играх скриншоты сохраняются молча, без окон и уведомлений. После игры покажется итог.",
-                 bg=PANEL, fg=MUTED, font=(FONT, 9), justify="left", anchor="w", wraplength=520).pack(fill="x", pady=(0, 4))
 
         s = self.section(parent, "save", "Сохранение")
         r1 = tk.Frame(s, bg=PANEL)
@@ -796,16 +840,39 @@ class ShotFile:
         icon_label(r3, G_PAGE, PANEL, FG, 13).pack(side="left", padx=(0, 12))
         tk.Label(r3, text="Шаблон имени файла", bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
         self.field(r3, v["template"]).pack(side="left", fill="x", expand=True)
-        tk.Label(s, text="yyyy год, MM месяц, dd день, HH час, mm минуты, ss секунды", bg=PANEL, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x", pady=(0, 2))
-        self.toggle_row(s, G_BELL, "Уведомлять после сохранения", v["notify"])
+        self.hint(s, "yyyy год, MM месяц, dd день, HH час, mm минуты, ss секунды", pady=(0, 4))
+
+        n = self.section(parent, "notify", "Уведомления")
+        self.toggle_row(n, G_BELL, "Уведомлять после сохранения", v["notify"])
+        r4 = tk.Frame(n, bg=PANEL)
+        r4.pack(fill="x", pady=6)
+        icon_label(r4, G_CLOCK, PANEL, FG, 13).pack(side="left", padx=(0, 12))
+        tk.Label(r4, text="Сколько показывать", bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
+        nbox, _ = self.combo(r4, v["toast"], list(TOAST_CHOICES))
+        nbox.pack(side="left", fill="x", expand=True)
+        self.hint(n, "Окно «Скриншот сохранён» появляется в правом нижнем углу и закрывается само. В игровом режиме уведомления не показываются.", G_INFO, pady=(6, 4))
+
+        k = self.section(parent, "keys", "Горячие клавиши")
+        self.toggle_row(k, G_KEYS, "Отслеживать сочетание клавиш Win + Shift + S", v["watch_hotkey"])
+        r5 = tk.Frame(k, bg=PANEL)
+        r5.pack(fill="x", pady=8)
+        tk.Label(r5, text="Сделать скриншот области", bg=PANEL, fg=FG, font=(FONT, 10)).pack(side="left", padx=(30, 0))
+        self.keycaps(r5, ["Win", "Shift", "S"]).pack(side="right")
+        self.hint(k, "Приложение ждёт, пока вы сделаете скриншот, и Windows поместит его в буфер обмена. Если выключить, сохраняется любая картинка из буфера.", G_INFO, pady=(4, 4))
 
         a = self.section(parent, "about", "О программе")
         tk.Label(a, text="%s %s" % (APP, VERSION), bg=PANEL, fg=FG, font=(FONT, 14, "bold"), anchor="w").pack(fill="x", pady=(6, 0))
         tk.Label(a, text="Сборка: %s" % BUILD, bg=PANEL, fg=ACCENT_SOFT, font=(FONT, 10), anchor="w").pack(fill="x", pady=(4, 0))
-        tk.Label(a, text="Скриншотнул — сохранил.\n\nНастройки хранятся в:\n%s" % CONFIG_PATH, bg=PANEL, fg=MUTED, font=(FONT, 9),
-                 justify="left", anchor="w", wraplength=520).pack(fill="x", pady=(10, 6))
+        tk.Label(a, text="Скриншотнул — сохранил.", bg=PANEL, fg=MUTED, font=(FONT, 10), anchor="w").pack(fill="x", pady=(8, 0))
+        tk.Frame(a, bg=LINE, height=1).pack(fill="x", pady=(12, 10))
+        tk.Label(a, text="Авторы", bg=PANEL, fg=FG, font=(FONT, 11, "bold"), anchor="w").pack(fill="x", pady=(0, 4))
+        for h in AUTHORS:
+            self.author_row(a, h)
+        tk.Frame(a, bg=LINE, height=1).pack(fill="x", pady=(10, 8))
+        tk.Label(a, text="Настройки хранятся в:\n%s" % CONFIG_PATH, bg=PANEL, fg=MUTED, font=(FONT, 9), justify="left", anchor="w", wraplength=520).pack(fill="x", pady=(0, 6))
 
     def settings_show(self, page):
+        self.cur_page = page
         for key, it in self.nav_items.items():
             it.set_fill(NAV_ON if key == page else BG_SIDE)
         for sec in self.secs.values():
@@ -831,6 +898,7 @@ class ShotFile:
         c["format"] = v["format"].get()
         c["template"] = v["template"].get().strip()
         c["notify"] = bool(v["notify"].get())
+        c["toast_seconds"] = TOAST_CHOICES.get(v["toast"].get(), 6)
         save_config(c)
         set_autostart(c["autostart"])
         self.refresh_main()
@@ -839,6 +907,7 @@ class ShotFile:
         except Exception:
             pass
         self.settings_win.destroy()
+        self.toast("Настройки сохранены", [], seconds=2)
 
     def shell(self, title="ShotFile"):
         d = tk.Toplevel(self.root)
@@ -941,7 +1010,7 @@ class ShotFile:
             self.toast("Не удалось сохранить", [str(e)])
             return
         if self.cfg["notify"]:
-            self.toast("Скриншот сохранён", ["Файл: %s" % path.name, "Папка: %s" % "/".join(path.parent.parts[-2:])], thumb=img)
+            self.toast("Скриншот сохранён", ["Файл: %s" % path.name, "Папка: %s" % "/".join(path.parent.parts[-2:])], thumb=img, seconds=self.cfg["toast_seconds"])
 
     def save_silent(self, img):
         try:
