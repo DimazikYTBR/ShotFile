@@ -437,7 +437,7 @@ class ShotFile:
         screen_h = self.root.winfo_screenheight()
         wanted_h = max(650, self.root.winfo_reqheight())
         window_h = min(wanted_h, max(500, screen_h - 80))
-        self.place(self.root, 560, window_h)
+        self.place(self.root, 560, None)
         appwindow(self.root, show=not self.cfg["start_minimized"])
         self.start_hotkey()
         self.start_tray()
@@ -579,7 +579,7 @@ class ShotFile:
         h = h or win.winfo_reqheight()
         x = (win.winfo_screenwidth() - w) // 2
         y = max(20, (win.winfo_screenheight() - h) // 2 - 20)
-        win.geometry("%dx%d+%d+%d" % (w, h, x, y))
+        win.("%dx%d+%d+%d" % (w, h, x, y))
 
     def chrome(self, win, title, close, minimize=None):
         win.configure(bg=BG)
