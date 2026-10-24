@@ -51,6 +51,7 @@ NAV_ON = "#2456c9"
 BTN = "#1a2748"
 BTN_HOVER = "#23345e"
 GOOD = "#22c55e"
+WARN = "#f59e0b"
 FONT = "Segoe UI"
 ICONS = "Segoe MDL2 Assets"
 
@@ -440,6 +441,7 @@ class ShotFile:
         self.last_hash = None
         self.last_time = 0.0
         self.in_game = False
+        self.paused = False
         self.game_saved = 0
         self.settings_win = None
         self.popup_win = None
@@ -450,6 +452,8 @@ class ShotFile:
         self.root.overrideredirect(True)
         self.root.title(APP)
         self.root.resizable(False, False)
+        self.enabled_var = tk.BooleanVar(master=self.root, value=True)
+        self.enabled_var.trace_add("write", lambda *a: self.on_enabled())
         self.tray_img = make_icon(64)
         self.logo = ImageTk.PhotoImage(make_icon(88, dark=True))
         self.win_icon = ImageTk.PhotoImage(make_icon(48))
@@ -531,12 +535,15 @@ class ShotFile:
         st = Round(pad, radius=14, padx=10, pady=6)
         st.pack(fill="x")
         sc = st.inner
-        dot = tk.Canvas(sc, width=14, height=14, bg=PANEL, highlightthickness=0)
-        dot.create_oval(2, 2, 12, 12, fill=GOOD, outline=GOOD)
-        dot.grid(row=0, column=0, rowspan=2, padx=(10, 12), pady=12)
-        tk.Label(sc, text="Работает в фоне", fg=FG, bg=PANEL, font=(FONT, 11), anchor="w").grid(row=0, column=1, sticky="w", pady=(10, 0))
+        self.dot = tk.Canvas(sc, width=14, height=14, bg=PANEL, highlightthickness=0)
+        self.dot_item = self.dot.create_oval(2, 2, 12, 12, fill=GOOD, outline=GOOD)
+        self.dot.grid(row=0, column=0, rowspan=2, padx=(10, 12), pady=12)
+        self.status_title = tk.Label(sc, text="Работает в фоне", fg=FG, bg=PANEL, font=(FONT, 11), anchor="w")
+        self.status_title.grid(row=0, column=1, sticky="w", pady=(10, 0))
         self.status_sub = tk.Label(sc, fg=MUTED, bg=PANEL, font=(FONT, 10), anchor="w")
         self.status_sub.grid(row=1, column=1, sticky="w", pady=(0, 10))
+        sc.columnconfigure(1, weight=1)
+        Toggle(sc, self.enabled_var, PANEL).grid(row=0, column=2, rowspan=2, padx=(10, 8))
 
         rows = Round(pad, radius=14, padx=8, pady=6)
         rows.pack(fill="x", pady=16)
@@ -585,7 +592,12 @@ class ShotFile:
         self.vals["folder"].config(text=short)
         self.vals["format"].config(text=str(c["format"]).upper())
         self.vals["template"].config(text=c["template"])
-        if self.in_game:
+        color = WARN if self.paused else GOOD
+        self.dot.itemconfig(self.dot_item, fill=color, outline=color)
+        self.status_title.config(text="Приостановлено" if self.paused else "Работает в фоне")
+        if self.paused:
+            self.status_sub.config(text="Скриншоты не сохраняются, пока вы не включите")
+        elif self.in_game:
             self.status_sub.config(text="Игровой режим: сохраняю без окон и уведомлений")
         elif c["watch_hotkey"] and self.has_hotkey:
             self.status_sub.config(text="Ожидает сочетание клавиш Win + Shift + S")
@@ -648,6 +660,14 @@ class ShotFile:
         tk.Label(wrap, text="Отправляйте только в сети TON (The Open Network).", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x", pady=(14, 0))
         self.place(d, 540, None)
         appwindow(d)
+
+    def on_enabled(self):
+        self.paused = not self.enabled_var.get()
+        self.refresh_main()
+        try:
+            self.tray.update_menu()
+        except Exception:
+            pass
 
     def show_main(self):
         self.root.deiconify()
@@ -725,9 +745,12 @@ class ShotFile:
 
         self.secs = {}
         self.build_sections(self.s_content)
-        self.settings_show("general")
-        w.update_idletasks()
-        self.place(w, 840, max(w.winfo_reqheight(), 500))
+        heights = []
+        for pg in self.PAGES:
+            self.settings_show(pg)
+            w.update_idletasks()
+            heights.append(w.winfo_reqheight())
+        self.place(w, 840, max(max(heights), 500))
         self.settings_show(page)
         appwindow(w)
 
@@ -1078,6 +1101,8 @@ class ShotFile:
             if seq == last:
                 continue
             last = seq
+            if self.paused:
+                continue
             if self.cfg["watch_hotkey"] and self.has_hotkey and time.time() > self.armed_until:
                 continue
             time.sleep(0.15)
@@ -1109,6 +1134,9 @@ class ShotFile:
             save_config(self.cfg)
             set_autostart(self.cfg["autostart"])
 
+        def toggle_pause(icon, item):
+            self.q.put(lambda: self.enabled_var.set(not self.enabled_var.get()))
+
         def toggle_game(icon, item):
             self.cfg["game_mode"] = not self.cfg["game_mode"]
             save_config(self.cfg)
@@ -1122,6 +1150,7 @@ class ShotFile:
                 I("Автоматически", set_mode("auto"), checked=lambda item: self.cfg["mode"] == "auto", radio=True),
                 I("Спрашивать", set_mode("ask"), checked=lambda item: self.cfg["mode"] == "ask", radio=True),
             )),
+            I(lambda item: "Включить сохранение" if self.paused else "Приостановить сохранение", toggle_pause),
             I("Игровой режим", toggle_game, checked=lambda item: self.cfg["game_mode"]),
             I("Запускать с Windows", toggle_autostart, checked=lambda item: self.cfg["autostart"]),
             M.SEPARATOR,
