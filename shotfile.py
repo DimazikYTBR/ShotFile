@@ -6,6 +6,7 @@ import re
 import sys
 import threading
 import time
+import tkinter.font as tkfont
 from datetime import datetime
 from pathlib import Path
 
@@ -271,14 +272,54 @@ def icon_label(parent, glyph, bg, fg=MUTED, size=14):
     return tk.Label(parent, text=glyph, bg=bg, fg=fg, font=(ICONS, size))
 
 
+def rounded_rect(canvas, x1, y1, x2, y2, radius, fill, outline=None, width=1):
+    radius = max(2, min(radius, (x2 - x1) // 2, (y2 - y1) // 2))
+    points = [x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+              x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+              x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1]
+    return canvas.create_polygon(points, smooth=True, splinesteps=16, fill=fill,
+                                 outline=outline or fill, width=width)
+
+
 def button(parent, text, command, primary=False, padx=22, pady=8, bg_parent=BG):
     base = ACCENT if primary else BTN
     hover = "#3b78ff" if primary else BTN_HOVER
-    b = tk.Label(parent, text=text, bg=base, fg="#ffffff", font=(FONT, 10), padx=padx, pady=pady, cursor="hand2")
-    b.bind("<Enter>", lambda e: b.config(bg=hover))
-    b.bind("<Leave>", lambda e: b.config(bg=base))
+    try:
+        bg_parent = parent.cget("bg")
+    except Exception:
+        pass
+    font = tkfont.Font(family=FONT, size=10)
+    width = max(76, font.measure(text) + padx * 2)
+    height = font.metrics("linespace") + pady * 2 + 4
+    b = tk.Canvas(parent, width=width, height=height, bg=bg_parent, highlightthickness=0, bd=0, cursor="hand2")
+    b._base = base
+    b._hover = hover
+    b._text = text
+    b._font = font
+    b._fg = "#ffffff"
+    b._radius = min(12, height // 2)
+    def draw(color):
+        b.delete("all")
+        rounded_rect(b, 1, 1, width - 1, height - 1, b._radius, color)
+        b.create_text(width // 2, height // 2, text=b._text, fill=b._fg, font=b._font)
+    b._draw = draw
+    draw(base)
+    b.bind("<Enter>", lambda e: draw(hover))
+    b.bind("<Leave>", lambda e: draw(base))
     b.bind("<Button-1>", lambda e: command())
     return b
+
+
+class RoundedEntry(tk.Frame):
+    def __init__(self, parent, textvariable, **kwargs):
+        super().__init__(parent, bg=FIELD, highlightthickness=1, highlightbackground=LINE,
+                         highlightcolor=ACCENT, bd=0)
+        self.entry = tk.Entry(self, textvariable=textvariable, bg=FIELD, fg=FG,
+                              insertbackground=FG, relief="flat", bd=0, font=(FONT, 10),
+                              highlightthickness=0, **kwargs)
+        self.entry.pack(fill="both", expand=True, padx=10, pady=5)
+    def pack(self, *args, **kwargs):
+        return super().pack(*args, **kwargs)
 
 
 class Toggle(tk.Canvas):
@@ -355,41 +396,11 @@ class ShotFile:
         x = (win.winfo_screenwidth() - w) // 2
         y = max(20, (win.winfo_screenheight() - h) // 2 - 20)
         win.geometry("%dx%d+%d+%d" % (w, h, x, y))
-        self.apply_rounding(win)
-        if not getattr(win, "_shotfile_rounding_bound", False):
-            win.bind("<Configure>", lambda event, target=win: self.apply_rounding(target) if event.widget is target else None, add="+")
-            win._shotfile_rounding_bound = True
-
-    def apply_rounding(self, win):
-        try:
-            import ctypes
-            from ctypes import wintypes
-            win.update_idletasks()
-            hwnd = win.winfo_id()
-            width = win.winfo_width()
-            height = win.winfo_height()
-            if width < 2 or height < 2:
-                return
-            dimensions = (width, height)
-            if getattr(win, "_shotfile_rounding_size", None) == dimensions:
-                return
-            gdi32 = ctypes.windll.gdi32
-            user32 = ctypes.windll.user32
-            radius = 24
-            region = gdi32.CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2)
-            if region:
-                if user32.SetWindowRgn(hwnd, region, True):
-                    win._shotfile_rounding_size = dimensions
-                else:
-                    gdi32.DeleteObject(region)
-        except Exception:
-            pass
-
 
     def chrome(self, win, title, close, minimize=None):
-        win.configure(bg=LINE)
+        win.configure(bg=BG)
         card = tk.Frame(win, bg=BG)
-        card.pack(fill="both", expand=True, padx=1, pady=1)
+        card.pack(fill="both", expand=True)
         head = tk.Frame(card, bg=BG)
         head.pack(fill="x")
         ic = tk.Label(head, image=self.small_icon, bg=BG)
@@ -512,8 +523,8 @@ class ShotFile:
                  bg=BG, fg="#c5cde0", font=(FONT, 10), justify="left", anchor="w", wraplength=460).pack(fill="x", pady=(14, 18))
         tk.Label(wrap, text="Адрес кошелька TON", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x", pady=(0, 6))
         var = tk.StringVar(master=d, value=TON_ADDRESS)
-        tk.Entry(wrap, textvariable=var, state="readonly", readonlybackground=FIELD, fg=FG, relief="flat", font=("Consolas", 10),
-                 highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT).pack(fill="x", ipady=8)
+        address = RoundedEntry(wrap, var, state="readonly", readonlybackground=FIELD, font=("Consolas", 10))
+        address.pack(fill="x", ipady=3)
         btns = tk.Frame(wrap, bg=BG)
         btns.pack(fill="x", pady=(16, 0))
 
@@ -634,8 +645,7 @@ class ShotFile:
         Toggle(r, var, PANEL).pack(side="right")
 
     def entry(self, parent, var):
-        return tk.Entry(parent, textvariable=var, bg=FIELD, fg=FG, insertbackground=FG, relief="flat", font=(FONT, 10),
-                        highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT)
+        return RoundedEntry(parent, var)
 
     def build_sections(self, parent):
         v = self.v
