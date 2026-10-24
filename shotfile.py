@@ -298,11 +298,10 @@ def appwindow(win, show=True, radius=16):
         style = (style & ~0x80) | 0x40000
         ctypes.windll.user32.SetWindowLongW(hwnd, -20, style)
         round_window(win, radius)
-        win.withdraw()
-        if show:
-            win.after(20, win.deiconify)
     except Exception:
         pass
+    if show:
+        win.deiconify()
 
 
 pystray = ImageTk = None
@@ -365,13 +364,17 @@ class Round(tk.Frame):
         base = max(3, int(radius * 0.4))
         self.inner.pack(fill="both", expand=True, padx=base if padx is None else padx, pady=base if pady is None else pady)
         self.cv.bind("<Configure>", self.redraw)
+        self.cv.bind("<Map>", lambda e: self.draw(self.cv.winfo_width(), self.cv.winfo_height()))
+
+    def draw(self, w, h):
+        if (w, h) == self.size or w < 4 or h < 4:
+            return
+        self.size = (w, h)
+        self.cv.delete("all")
+        self.shape = self.cv.create_polygon(rr_points(w, h, self.radius), smooth=True, fill=self.fill, outline=self.outline)
 
     def redraw(self, e):
-        if (e.width, e.height) == self.size:
-            return
-        self.size = (e.width, e.height)
-        self.cv.delete("all")
-        self.shape = self.cv.create_polygon(rr_points(e.width, e.height, self.radius), smooth=True, fill=self.fill, outline=self.outline)
+        self.draw(e.width, e.height)
 
     def set_fill(self, color):
         self.fill = color
@@ -449,6 +452,7 @@ class ShotFile:
         self.support_win = None
 
         self.root = tk.Tk()
+        self.root.withdraw()
         self.root.overrideredirect(True)
         self.root.title(APP)
         self.root.resizable(False, False)
@@ -623,8 +627,8 @@ class ShotFile:
             return
         d = tk.Toplevel(self.root)
         self.support_win = d
+        d.withdraw()
         d.overrideredirect(True)
-        d.attributes("-topmost", True)
         body = self.chrome(d, "Поддержать автора", d.destroy)
         wrap = tk.Frame(body, bg=BG)
         wrap.pack(fill="both", expand=True, padx=28, pady=(10, 26))
@@ -698,6 +702,7 @@ class ShotFile:
         c = self.cfg
         w = tk.Toplevel(self.root)
         self.settings_win = w
+        w.withdraw()
         w.overrideredirect(True)
         body = self.chrome(w, APP + " — Настройки", w.destroy)
         self.v = {
@@ -934,6 +939,7 @@ class ShotFile:
 
     def shell(self, title="ShotFile"):
         d = tk.Toplevel(self.root)
+        d.withdraw()
         d.overrideredirect(True)
         d.attributes("-topmost", True)
         d.configure(bg=LINE)
@@ -956,6 +962,7 @@ class ShotFile:
         y = d.winfo_screenheight() - d.winfo_reqheight() - 64
         d.geometry("+%d+%d" % (x, y))
         round_window(d, 14)
+        d.deiconify()
 
     def toast(self, title, lines, thumb=None, seconds=6):
         if self.toast_win is not None and self.toast_win.winfo_exists():
