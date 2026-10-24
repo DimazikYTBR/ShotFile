@@ -11,7 +11,7 @@ from pathlib import Path
 
 APP = "ShotFile"
 VERSION = "1.0"
-SUPPORT_URL = ""
+TON_ADDRESS = "UQAbta5Av9SF3M4SlLTht530Ujth_SWotOpEx3A7cLCf8JxR"
 APPDATA = Path(os.environ.get("APPDATA", str(Path.home()))) / APP
 CONFIG_PATH = APPDATA / "config.json"
 
@@ -48,6 +48,7 @@ G_PASTE, G_HEART, G_BELL, G_KEYS = "", "", "", ""
 G_INFO, G_BOLT, G_CLOSE, G_CHEV = "", "", "", ""
 G_DOWN, G_CLOCK, G_POWER, G_CHECK = "", "", "", ""
 G_AUTO, G_TRAY = "", ""
+G_MIN, G_WCLOSE = "", ""
 
 
 def load_config():
@@ -213,16 +214,17 @@ def already_running():
     return ctypes.windll.kernel32.GetLastError() == 183
 
 
-def dark_titlebar(win):
+def appwindow(win, show=True):
     try:
         import ctypes
         win.update_idletasks()
         hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
-        val = ctypes.c_int(1)
-        for attr in (20, 19):
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(val), ctypes.sizeof(val))
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+        style = (style & ~0x80) | 0x40000
+        ctypes.windll.user32.SetWindowLongW(hwnd, -20, style)
         win.withdraw()
-        win.deiconify()
+        if show:
+            win.after(20, win.deiconify)
     except Exception:
         pass
 
@@ -312,7 +314,9 @@ class ShotFile:
         self.popup_win = None
         self.toast_win = None
 
+        self.support_win = None
         self.root = tk.Tk()
+        self.root.overrideredirect(True)
         self.root.title(APP)
         self.root.configure(bg=BG)
         self.root.resizable(False, False)
@@ -332,13 +336,11 @@ class ShotFile:
         self.root.option_add("*TCombobox*Listbox.foreground", FG)
         self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
 
-        self.build_main()
+        self.build_main(self.chrome(self.root, APP, self.hide_main, self.hide_main))
         self.place(self.root, 560, None)
-        dark_titlebar(self.root)
+        appwindow(self.root, show=not self.cfg["start_minimized"])
         self.start_hotkey()
         self.start_tray()
-        if self.cfg["start_minimized"]:
-            self.root.withdraw()
         threading.Thread(target=self.watch, daemon=True).start()
         self.root.after(100, self.pump)
 
@@ -350,8 +352,45 @@ class ShotFile:
         win.geometry("%dx%d+%d+%d" % (w, h, x, y))
 
 
-    def build_main(self):
-        pad = tk.Frame(self.root, bg=BG)
+    def chrome(self, win, title, close, minimize=None):
+        win.configure(bg=LINE)
+        card = tk.Frame(win, bg=BG)
+        card.pack(fill="both", expand=True, padx=1, pady=1)
+        head = tk.Frame(card, bg=BG)
+        head.pack(fill="x")
+        ic = tk.Label(head, image=self.small_icon, bg=BG)
+        ic.pack(side="left", padx=(16, 10), pady=10)
+        tt = tk.Label(head, text=title, bg=BG, fg=FG, font=(FONT, 11))
+        tt.pack(side="left")
+
+        def cbtn(glyph, cmd, hover):
+            b = tk.Label(head, text=glyph, bg=BG, fg=FG, font=(ICONS, 10), width=5, pady=11, cursor="hand2")
+            b.pack(side="right")
+            b.bind("<Enter>", lambda e: b.config(bg=hover))
+            b.bind("<Leave>", lambda e: b.config(bg=BG))
+            b.bind("<Button-1>", lambda e: cmd())
+
+        cbtn(G_WCLOSE, close, "#c42b1c")
+        if minimize:
+            cbtn(G_MIN, minimize, BTN_HOVER)
+        drag = {}
+
+        def start(e):
+            drag["x"] = e.x_root - win.winfo_x()
+            drag["y"] = e.y_root - win.winfo_y()
+
+        def move(e):
+            win.geometry("+%d+%d" % (e.x_root - drag["x"], e.y_root - drag["y"]))
+
+        for wd in (head, ic, tt):
+            wd.bind("<Button-1>", start)
+            wd.bind("<B1-Motion>", move)
+        body = tk.Frame(card, bg=BG)
+        body.pack(fill="both", expand=True)
+        return body
+
+    def build_main(self, parent):
+        pad = tk.Frame(parent, bg=BG)
         pad.pack(fill="both", expand=True, padx=34, pady=(34, 20))
         tk.Label(pad, image=self.logo, bg=BG).pack()
         tk.Label(pad, text=APP, bg=BG, fg=FG, font=(FONT, 28, "bold")).pack(pady=(10, 0))
@@ -419,11 +458,49 @@ class ShotFile:
             self.status_sub.config(text="Следит за буфером обмена")
 
     def support(self):
-        if SUPPORT_URL:
-            import webbrowser
-            webbrowser.open(SUPPORT_URL)
-        else:
-            self.toast("Спасибо!", ["Страница поддержки автора скоро появится."])
+        if self.support_win is not None and self.support_win.winfo_exists():
+            self.support_win.lift()
+            return
+        d = tk.Toplevel(self.root)
+        self.support_win = d
+        d.overrideredirect(True)
+        d.attributes("-topmost", True)
+        body = self.chrome(d, "Поддержать автора", d.destroy)
+        wrap = tk.Frame(body, bg=BG)
+        wrap.pack(fill="both", expand=True, padx=28, pady=(10, 26))
+        top = tk.Frame(wrap, bg=BG)
+        top.pack(fill="x")
+        icon_label(top, G_HEART, BG, ACCENT_SOFT, 20).pack(side="left", padx=(0, 12))
+        tk.Label(top, text="Поддержать автора", bg=BG, fg=FG, font=(FONT, 16, "bold")).pack(side="left")
+        tk.Label(wrap, text="Если ShotFile вам пригодился, можно отправить любую сумму в TON. Это добровольно: программа работает полностью и без этого.",
+                 bg=BG, fg="#c5cde0", font=(FONT, 10), justify="left", anchor="w", wraplength=460).pack(fill="x", pady=(14, 18))
+        tk.Label(wrap, text="Адрес кошелька TON", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x", pady=(0, 6))
+        var = tk.StringVar(master=d, value=TON_ADDRESS)
+        tk.Entry(wrap, textvariable=var, state="readonly", readonlybackground=FIELD, fg=FG, relief="flat", font=("Consolas", 10),
+                 highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT).pack(fill="x", ipady=8)
+        btns = tk.Frame(wrap, bg=BG)
+        btns.pack(fill="x", pady=(16, 0))
+
+        def copy():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(TON_ADDRESS)
+            self.root.update()
+            cp.config(text="Скопировано")
+            d.after(2000, lambda: d.winfo_exists() and cp.config(text="Скопировать адрес"))
+
+        def open_wallet():
+            try:
+                os.startfile("ton://transfer/" + TON_ADDRESS)
+            except Exception:
+                import webbrowser
+                webbrowser.open("https://app.tonkeeper.com/transfer/" + TON_ADDRESS)
+
+        cp = button(btns, "Скопировать адрес", copy, primary=True, padx=20)
+        cp.pack(side="left")
+        button(btns, "Открыть в кошельке", open_wallet, padx=20).pack(side="left", padx=(10, 0))
+        tk.Label(wrap, text="Отправляйте только в сети TON (The Open Network).", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x", pady=(14, 0))
+        self.place(d, 540, None)
+        appwindow(d)
 
     def show_main(self):
         self.root.deiconify()
@@ -440,7 +517,6 @@ class ShotFile:
         except Exception as e:
             self.toast("Не удалось открыть папку", [str(e)])
 
-
     NAV = [("general", G_SETTINGS, "Основные"), ("save", G_FOLDER, "Сохранение"), ("mode", G_BOLT, "Режим работы"),
            ("notify", G_BELL, "Уведомления"), ("keys", G_KEYS, "Горячие клавиши"), ("about", G_INFO, "О программе")]
     PAGES = {"general": ["general", "mode", "save"], "save": ["save"], "mode": ["mode"],
@@ -455,10 +531,8 @@ class ShotFile:
         c = self.cfg
         w = tk.Toplevel(self.root)
         self.settings_win = w
-        w.title(APP + " — Настройки")
-        w.configure(bg=BG)
-        w.resizable(False, False)
-        w.iconphoto(False, self.win_icon)
+        w.overrideredirect(True)
+        body = self.chrome(w, APP + " — Настройки", w.destroy)
         self.v = {
             "autostart": tk.BooleanVar(master=w, value=c["autostart"]),
             "start_minimized": tk.BooleanVar(master=w, value=c["start_minimized"]),
@@ -470,10 +544,10 @@ class ShotFile:
             "notify": tk.BooleanVar(master=w, value=c["notify"]),
         }
 
-        side = tk.Frame(w, bg=BG_SIDE, width=210)
+        side = tk.Frame(body, bg=BG_SIDE, width=210)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
-        tk.Frame(w, bg=LINE, width=1).pack(side="left", fill="y")
+        tk.Frame(body, bg=LINE, width=1).pack(side="left", fill="y")
         self.nav_items = {}
         tk.Frame(side, bg=BG_SIDE, height=12).pack()
         for key, glyph, label in self.NAV:
@@ -486,7 +560,7 @@ class ShotFile:
             bind_tree(it, "<Button-1>", lambda e, k=key: self.settings_show(k))
             self.nav_items[key] = it
 
-        main = tk.Frame(w, bg=BG)
+        main = tk.Frame(body, bg=BG)
         main.pack(side="left", fill="both", expand=True)
         self.s_content = tk.Frame(main, bg=BG)
         self.s_content.pack(fill="both", expand=True, padx=20, pady=(16, 0))
@@ -503,7 +577,7 @@ class ShotFile:
         w.update_idletasks()
         self.place(w, 840, max(w.winfo_reqheight(), 600))
         self.settings_show(page)
-        dark_titlebar(w)
+        appwindow(w)
 
     def section(self, parent, key, title):
         outer = tk.Frame(parent, bg=BG)
