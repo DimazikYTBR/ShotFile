@@ -3,16 +3,23 @@ import json
 import os
 import queue
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import tkinter.font as tkfont
 from datetime import datetime
 from pathlib import Path
 
 APP = "ShotFile"
-VERSION = "1.0.0"
-BUILD = "20261024.2"
+VERSION = "1.0.1"
+BUILD = "20261024.3"
+GITHUB_RELEASE_API = "https://api.github.com/repos/DimazikYTBR/ShotFile/releases/tags/latest"
+GITHUB_REPO_URL = "https://github.com/DimazikYTBR/ShotFile/releases/latest"
+UPDATE_CHECK_INTERVAL = 6 * 60 * 60
 TON_ADDRESS = "UQAbta5Av9SF3M4SlLTht530Ujth_SWotOpEx3A7cLCf8JxR"
 APPDATA = Path(os.environ.get("APPDATA", str(Path.home()))) / APP
 CONFIG_PATH = APPDATA / "config.json"
@@ -233,7 +240,7 @@ def appwindow(win, show=True):
 
 
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 
 pystray = ImageTk = None
 
@@ -310,6 +317,43 @@ def button(parent, text, command, primary=False, padx=22, pady=8, bg_parent=BG):
     return b
 
 
+class RoundedCard(tk.Canvas):
+    def __init__(self, parent, bg=PANEL, outline=LINE, radius=16, **kwargs):
+        super().__init__(parent, bg=parent.cget("bg"), highlightthickness=0, bd=0, **kwargs)
+        self.card_bg = bg
+        self.card_outline = outline
+        self.radius = radius
+        self.content = tk.Frame(self, bg=bg, bd=0, highlightthickness=0)
+        self.window_id = self.create_window(radius, radius, anchor="nw", window=self.content)
+        self.bind("<Configure>", self._resize)
+        self.content.bind("<Configure>", self._content_resize)
+        self.after_idle(self._sync_size)
+
+    def _resize(self, event=None):
+        w = max(1, self.winfo_width() - self.radius * 2)
+        h = max(1, self.content.winfo_reqheight())
+        self.coords(self.window_id, self.radius, self.radius)
+        self.itemconfigure(self.window_id, width=w, height=h)
+        self.delete("rounded-background")
+        rounded_rect(self, 1, 1, max(2, self.winfo_width() - 1), max(2, self.winfo_height() - 1),
+                     self.radius, self.card_bg, self.card_outline, 1)
+        self.tag_lower("all")
+        self.tag_raise(self.window_id)
+
+    def _content_resize(self, event=None):
+        self.after_idle(self._sync_size)
+
+    def _sync_size(self):
+        try:
+            h = self.content.winfo_reqheight() + self.radius * 2
+            w = max(self.winfo_width(), self.winfo_reqwidth() + self.radius * 2)
+            self.configure(height=h)
+            self.itemconfigure(self.window_id, width=max(1, w - self.radius * 2), height=self.content.winfo_reqheight())
+            self._resize()
+        except tk.TclError:
+            pass
+
+
 class RoundedEntry(tk.Frame):
     def __init__(self, parent, textvariable, **kwargs):
         super().__init__(parent, bg=FIELD, highlightthickness=1, highlightbackground=LINE,
@@ -359,6 +403,9 @@ class ShotFile:
         self.game_active = False
         self.game_shots = []
         self.game_last_check = 0.0
+        self.online_update_prompt_open = False
+        self.online_update_check_running = False
+        self.online_update_checked_at = 0.0
 
         self.support_win = None
         self.root = tk.Tk()
@@ -389,6 +436,136 @@ class ShotFile:
         self.start_tray()
         threading.Thread(target=self.watch, daemon=True).start()
         self.root.after(100, self.pump)
+        self.root.after(8000, self.check_github_update)
+
+    def check_github_update(self):
+        if not self.running:
+            return
+        now = time.time()
+        if not self.online_update_check_running and now - self.online_update_checked_at >= UPDATE_CHECK_INTERVAL:
+            self.online_update_check_running = True
+            threading.Thread(target=self._github_update_worker, daemon=True).start()
+        self.root.after(UPDATE_CHECK_INTERVAL * 1000, self.check_github_update)
+
+    def _github_update_worker(self):
+        candidate = None
+        release_version = None
+        try:
+            request = urllib.request.Request(
+                GITHUB_RELEASE_API,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "ShotFile-Updater/1.0",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=12) as response:
+                release = json.loads(response.read().decode("utf-8"))
+            if release.get("draft") or release.get("prerelease"):
+                return
+            assets = release.get("assets", [])
+            asset = next((a for a in assets if a.get("name", "").lower() == "shotfile.py"), None)
+            if asset is None:
+                self.root.after(0, self._github_update_result, None, None, "В релизе latest не найден ShotFile.py. Добавь новый ShotFile.py в Assets релиза.")
+                return
+            download_url = asset.get("browser_download_url")
+            if not download_url:
+                return
+            download_request = urllib.request.Request(download_url, headers={"User-Agent": "ShotFile-Updater/1.0"})
+            with urllib.request.urlopen(download_request, timeout=25) as response:
+                content = response.read(8 * 1024 * 1024 + 1)
+            if len(content) > 8 * 1024 * 1024:
+                raise ValueError("Файл обновления больше 8 МБ.")
+            source = content.decode("utf-8-sig")
+            compile(source, asset.get("name", "ShotFile.py"), "exec")
+            match = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
+            build_match = re.search(r'^BUILD\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
+            release_version = match.group(1) if match else release.get("tag_name", "unknown")
+            remote_build = build_match.group(1) if build_match else ""
+            if self._version_key(release_version) <= self._version_key(VERSION) and (not remote_build or remote_build <= BUILD):
+                self.online_update_checked_at = time.time()
+                return
+            current = Path(__file__).resolve()
+            if current.suffix.lower() != ".py":
+                self.root.after(0, self._github_update_result, None, release_version, "Автообновление из GitHub сейчас поддерживается при запуске ShotFile.py. Для EXE понадобится отдельный установщик обновлений.")
+                return
+            update_path = current.parent / (".ShotFile_download_%s.py" % os.getpid())
+            update_path.write_text(source, encoding="utf-8")
+            candidate = str(update_path)
+            self.root.after(0, self._github_update_result, candidate, release_version, None)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                self.root.after(0, self._github_update_result, None, None, "Не удалось прочитать релиз latest на GitHub. Проверь, что релиз опубликован и доступен публично.")
+        except Exception:
+            pass
+        finally:
+            self.online_update_checked_at = time.time()
+            self.online_update_check_running = False
+
+    @staticmethod
+    def _version_key(value):
+        parts = re.findall(r"\d+", str(value))
+        return tuple(int(part) for part in parts) if parts else (0,)
+
+    def _github_update_result(self, candidate, version, error):
+        if not self.running:
+            return
+        if error:
+            return
+        if candidate and Path(candidate).is_file() and not self.online_update_prompt_open:
+            self.online_update_prompt_open = True
+            try:
+                accepted = messagebox.askyesno(
+                    "Доступно обновление ShotFile",
+                    "На GitHub в релизе latest найдена версия %s.\n\nСкачать ShotFile.py, заменить текущий файл и перезапустить программу?\nРезервная копия будет сохранена рядом." % version,
+                    parent=self.root,
+                )
+                if accepted:
+                    self._install_update_file(Path(candidate))
+                else:
+                    try:
+                        Path(candidate).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            finally:
+                self.online_update_prompt_open = False
+
+    def _install_update_file(self, candidate):
+        current = Path(__file__).resolve()
+        if current.suffix.lower() != ".py":
+            messagebox.showerror("Обновление ShotFile", "Автообновление поддерживается при запуске из .py файла.", parent=self.root)
+            return
+        helper = current.parent / "_shotfile_update_helper.py"
+        helper.write_text(
+            "import ctypes, os, shutil, subprocess, sys, time\n"
+            "pid, source, target, backup = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]\n"
+            "if os.name == 'nt':\n"
+            "    handle = ctypes.windll.kernel32.OpenProcess(0x00100000, False, pid)\n"
+            "    if handle:\n"
+            "        ctypes.windll.kernel32.WaitForSingleObject(handle, 0xFFFFFFFF)\n"
+            "        ctypes.windll.kernel32.CloseHandle(handle)\n"
+            "else:\n"
+            "    while True:\n"
+            "        try: os.kill(pid, 0); time.sleep(0.3)\n"
+            "        except OSError: break\n"
+            "try:\n"
+            "    shutil.copy2(target, backup)\n"
+            "    shutil.copy2(source, target)\n"
+            "    os.remove(source)\n"
+            "    subprocess.Popen([sys.executable, target], cwd=os.path.dirname(target))\n"
+            "except Exception as exc:\n"
+            "    try:\n"
+            "        if os.path.exists(backup): shutil.copy2(backup, target)\n"
+            "    except Exception: pass\n"
+            "    raise exc\n"
+            "finally:\n"
+            "    try: os.remove(__file__)\n"
+            "    except OSError: pass\n",
+            encoding="utf-8",
+        )
+        backup = str(current.with_name(current.stem + "_backup" + current.suffix))
+        subprocess.Popen([sys.executable, str(helper), str(os.getpid()), str(candidate), str(current), backup], cwd=str(current.parent), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        self.quit()
 
     def place(self, win, w, h):
         win.update_idletasks()
@@ -441,22 +618,25 @@ class ShotFile:
         tk.Label(pad, text=APP, bg=BG, fg=FG, font=(FONT, 28, "bold")).pack(pady=(10, 0))
         tk.Label(pad, text="Скриншотнул — сохранил.", bg=BG, fg=ACCENT_SOFT, font=(FONT, 13)).pack(pady=(2, 22))
 
-        st = tk.Frame(pad, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        st = RoundedCard(pad)
         st.pack(fill="x")
-        dot = tk.Canvas(st, width=14, height=14, bg=PANEL, highlightthickness=0)
+        st_body = st.content
+        st_body.pack_propagate(True)
+        dot = tk.Canvas(st_body, width=14, height=14, bg=PANEL, highlightthickness=0)
         dot.create_oval(2, 2, 12, 12, fill=GOOD, outline=GOOD)
         dot.grid(row=0, column=0, rowspan=2, padx=(18, 12), pady=16)
-        tk.Label(st, text="Работает в фоне", fg=FG, bg=PANEL, font=(FONT, 11), anchor="w").grid(row=0, column=1, sticky="w", pady=(14, 0))
-        self.status_sub = tk.Label(st, fg=MUTED, bg=PANEL, font=(FONT, 10), anchor="w")
+        tk.Label(st_body, text="Работает в фоне", fg=FG, bg=PANEL, font=(FONT, 11), anchor="w").grid(row=0, column=1, sticky="w", pady=(14, 0))
+        self.status_sub = tk.Label(st_body, fg=MUTED, bg=PANEL, font=(FONT, 10), anchor="w")
         self.status_sub.grid(row=1, column=1, sticky="w", pady=(0, 14))
 
-        rows = tk.Frame(pad, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        rows = RoundedCard(pad)
         rows.pack(fill="x", pady=16)
+        rows_body = rows.content
         self.vals = {}
         items = [("mode", G_PASTE, "Режим сохранения", "save"), ("folder", G_FOLDER, "Папка сохранения", "save"),
                  ("format", G_PHOTO, "Формат файлов", "save"), ("template", G_PAGE, "Имя файла", "save")]
         for i, (key, glyph, label, page) in enumerate(items):
-            row = tk.Frame(rows, bg=PANEL, cursor="hand2")
+            row = tk.Frame(rows_body, bg=PANEL, cursor="hand2")
             row.pack(fill="x")
             inner = tk.Frame(row, bg=PANEL)
             inner.pack(fill="x", padx=16, pady=13)
@@ -471,7 +651,7 @@ class ShotFile:
             bind_tree(row, "<Enter>", lambda e, r=row: set_bg_tree(r, FIELD))
             bind_tree(row, "<Leave>", lambda e, r=row: set_bg_tree(r, PANEL))
             if i < len(items) - 1:
-                tk.Frame(rows, bg=LINE, height=1).pack(fill="x", padx=16)
+                tk.Frame(rows_body, bg=LINE, height=1).pack(fill="x", padx=16)
 
         tk.Frame(pad, bg=LINE, height=1).pack(fill="x", pady=(8, 0))
         bar = tk.Frame(pad, bg=BG)
@@ -546,8 +726,15 @@ class ShotFile:
         cp.pack(side="left")
         button(btns, "Открыть в кошельке", open_wallet, padx=20).pack(side="left", padx=(10, 0))
         tk.Label(wrap, text="Отправляйте только в сети TON (The Open Network).", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x", pady=(14, 0))
-        self.place(d, 540, None)
-        appwindow(d)
+        d.update_idletasks()
+        width = max(540, d.winfo_reqwidth())
+        height = d.winfo_reqheight()
+        x = max(0, (d.winfo_screenwidth() - width) // 2)
+        y = max(0, (d.winfo_screenheight() - height) // 2)
+        d.geometry(f"{width}x{height}+{x}+{y}")
+        d.deiconify()
+        d.lift()
+        d.focus_force()
 
     def show_main(self):
         self.root.deiconify()
@@ -630,9 +817,9 @@ class ShotFile:
     def section(self, parent, key, title):
         outer = tk.Frame(parent, bg=BG)
         tk.Label(outer, text=title, bg=BG, fg=FG, font=(FONT, 12), anchor="w").pack(fill="x", pady=(0, 8))
-        card = tk.Frame(outer, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        card = RoundedCard(outer)
         card.pack(fill="x")
-        inner = tk.Frame(card, bg=PANEL)
+        inner = card.content
         inner.pack(fill="x", padx=16, pady=12)
         self.secs[key] = outer
         return inner
