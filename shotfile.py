@@ -579,7 +579,7 @@ class ShotFile:
         h = h or win.winfo_reqheight()
         x = (win.winfo_screenwidth() - w) // 2
         y = max(20, (win.winfo_screenheight() - h) // 2 - 20)
-        win.("%dx%d+%d+%d" % (w, h, x, y))
+        win.geometry("%dx%d+%d+%d" % (w, h, x, y))
 
     def chrome(self, win, title, close, minimize=None):
         win.configure(bg=BG)
