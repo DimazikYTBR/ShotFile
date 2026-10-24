@@ -430,7 +430,14 @@ class ShotFile:
         self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
 
         self.build_main(self.chrome(self.root, APP, self.hide_main, self.hide_main))
-        self.place(self.root, 560, None)
+        # The main screen contains four settings rows plus the bottom action bar.
+        # Do not size the window from a clipped/early requested height: that hid
+        # the lower half of the main menu on Windows.
+        self.root.update_idletasks()
+        screen_h = self.root.winfo_screenheight()
+        wanted_h = max(650, self.root.winfo_reqheight())
+        window_h = min(wanted_h, max(500, screen_h - 80))
+        self.place(self.root, 560, window_h)
         appwindow(self.root, show=not self.cfg["start_minimized"])
         self.start_hotkey()
         self.start_tray()
