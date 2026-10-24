@@ -3,6 +3,10 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+permissions:
+  contents: write
+env:
+  PYTHONUTF8: "1"
 jobs:
   build:
     runs-on: windows-latest
@@ -14,7 +18,8 @@ jobs:
       - run: pip install -r requirements.txt pyinstaller
       - run: python shotfile.py --make-icon
       - run: pyinstaller --noconfirm --onefile --windowed --name ShotFile --icon icon.ico shotfile.py
-      - uses: actions/upload-artifact@v4
+      - uses: softprops/action-gh-release@v2
         with:
-          name: ShotFile-exe
-          path: dist/ShotFile.exe
+          tag_name: latest
+          name: ShotFile
+          files: dist/ShotFile.exe
