@@ -1,4 +1,4 @@
-name: Build ShotFile.exe
+name: Build ShotFile
 on:
   workflow_dispatch:
   push:
@@ -16,18 +16,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt pyinstaller
-      - shell: python
-        run: |
-          import os, re, datetime
-          version = re.search(r'VERSION = "([^"]+)"', open("shotfile.py", encoding="utf-8").read()).group(1)
-          stamp = "%s (%s)" % (os.environ["GITHUB_RUN_NUMBER"], datetime.date.today().strftime("%d.%m.%Y"))
-          open("build_info.py", "w").write("BUILD = %r\nREPO = %r\n" % (stamp, os.environ["GITHUB_REPOSITORY"]))
-          with open(os.environ["GITHUB_ENV"], "a") as f:
-              f.write("APP_VERSION=%s\n" % version)
+      - run: python prebuild.py
       - run: python shotfile.py --make-icon
-      - run: pyinstaller --noconfirm --onefile --windowed --hidden-import pystray._win32 --name ShotFile --icon icon.ico shotfile.py
+      - run: pyinstaller --noconfirm --onedir --windowed --noupx --hidden-import pystray._win32 --name ShotFile --icon icon.ico --version-file version.txt shotfile.py
+      - run: Compress-Archive -Path dist\ShotFile -DestinationPath ShotFile-win64.zip
+      - run: echo "SHA256=$((Get-FileHash ShotFile-win64.zip -Algorithm SHA256).Hash)" >> $env:GITHUB_ENV
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.APP_VERSION }}
           name: ShotFile ${{ env.APP_VERSION }}
-          files: dist/ShotFile.exe
+          body: "SHA-256: ${{ env.SHA256 }}"
+          files: ShotFile-win64.zip
