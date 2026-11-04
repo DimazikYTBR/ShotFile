@@ -1,3 +1,4 @@
+import ctypes
 import hashlib
 import json
 import os
@@ -7,6 +8,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from ctypes import wintypes
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog
@@ -17,10 +19,17 @@ try:
 except ImportError:
     BUILD = "dev"
 
+try:
+    from build_info import REPO
+except ImportError:
+    REPO = ""
+
 APP = "ShotFile"
-VERSION = "1.1"
+VERSION = "1.2"
 AUTHORS = ("dimzoffc", "yorvex")
-TOAST_CHOICES = {"3 секунды": 3, "6 секунд": 6, "10 секунд": 10}
+GAME_KEYS = {"Print Screen": "print screen", "F8": "f8", "F9": "f9", "F10": "f10",
+             "Ctrl + F12": "ctrl+f12", "Ctrl + Shift + S": "ctrl+shift+s"}
+IGNORED_PROCS = ("explorer", "shotfile", "python", "pythonw", "applicationframehost", "searchhost", "shellexperiencehost")
 TON_ADDRESS = "UQAbta5Av9SF3M4SlLTht530Ujth_SWotOpEx3A7cLCf8JxR"
 APPDATA = Path(os.environ.get("APPDATA", str(Path.home()))) / APP
 CONFIG_PATH = APPDATA / "config.json"
@@ -36,6 +45,12 @@ DEFAULTS = {
     "watch_hotkey": True,
     "game_mode": True,
     "toast_seconds": 6,
+    "lang": "auto",
+    "check_updates": True,
+    "game_shot": True,
+    "game_key": "print screen",
+    "game_folders": True,
+    "game_sound": True,
 }
 
 BG = "#0a1224"
@@ -60,6 +75,8 @@ G_PASTE, G_HEART, G_BELL, G_KEYS = "", "", "", ""
 G_INFO, G_BOLT, G_CLOSE, G_CHEV = "", "", "", ""
 G_CLOCK, G_AUTO, G_TRAY = "", "", ""
 G_MIN, G_WCLOSE, G_GAME = "", "", ""
+G_LANG, G_SYNC = "\uE774", "\uE72C"
+G_SHOT, G_SOUND = "\uE722", "\uE767"
 
 
 def load_config():
@@ -120,7 +137,145 @@ def save_image(img, cfg, when=None):
     return path
 
 
+LANG = "ru"
+LANG_LABELS = {"auto": "Авто / Auto", "ru": "Русский", "en": "English"}
+
+
+def detect_lang():
+    try:
+        import ctypes
+        return "ru" if ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0xFF == 0x19 else "en"
+    except Exception:
+        return "ru"
+
+
+def set_lang(cfg):
+    global LANG
+    v = cfg.get("lang", "auto")
+    LANG = detect_lang() if v == "auto" else ("en" if v == "en" else "ru")
+
+
+EN = {
+    "Автоматически": "Automatic",
+    "Спрашивать": "Ask",
+    "Скриншоты будут сохраняться сразу, без подтверждения.": "Screenshots are saved right away, without asking.",
+    "Перед сохранением появится окно с вопросом.": "A confirmation window appears before saving.",
+    "3 секунды": "3 seconds",
+    "6 секунд": "6 seconds",
+    "10 секунд": "10 seconds",
+    "Скриншотнул — сохранил.": "Snap it. Saved.",
+    "Работает в фоне": "Running in the background",
+    "Режим сохранения": "Save mode",
+    "Папка сохранения": "Save folder",
+    "Формат файлов": "File format",
+    "Имя файла": "File name",
+    "Настройки": "Settings",
+    "Поддержать автора": "Support the author",
+    "Приостановлено": "Paused",
+    "Скриншоты не сохраняются, пока вы не включите": "Screenshots are not saved until you turn it back on",
+    "Игровой режим: сохраняю без окон и уведомлений": "Game mode: saving without windows or notifications",
+    "Ожидает сочетание клавиш Win + Shift + S": "Waiting for Win + Shift + S",
+    "Следит за буфером обмена": "Watching the clipboard",
+    "Доступна версия %s": "Version %s is available",
+    "Если ShotFile вам пригодился, можно отправить любую сумму в TON. Это добровольно: программа работает полностью и без этого.": "If ShotFile was useful to you, you can send any amount in TON. It is voluntary: the program works fully without it.",
+    "Адрес кошелька TON": "TON wallet address",
+    "Скопировано": "Copied",
+    "Скопировать адрес": "Copy address",
+    "Открыть в кошельке": "Open in wallet",
+    "Отправляйте только в сети TON (The Open Network).": "Send only on the TON network (The Open Network).",
+    "Не удалось открыть папку": "Could not open the folder",
+    "Основные": "General",
+    "Сохранение": "Saving",
+    "Режим работы": "Mode",
+    "Уведомления": "Notifications",
+    "Горячие клавиши": "Hotkeys",
+    "О программе": "About",
+    " — Настройки": " — Settings",
+    "Версия %s\nСборка %s": "Version %s\nBuild %s",
+    "Сохранить": "Save",
+    "Отмена": "Cancel",
+    "Запускать вместе с Windows": "Start with Windows",
+    "Запускать свёрнутым в трей": "Start minimized to tray",
+    "Язык": "Language",
+    "Проверять обновления при запуске": "Check for updates on startup",
+    "Игровой режим": "Game mode",
+    "В полноэкранных играх скриншоты сохраняются молча, без окон и уведомлений. После игры покажется итог.": "In fullscreen games, screenshots are saved silently, without windows or notifications. A summary appears after the game.",
+    "Выбрать": "Browse",
+    "Шаблон имени файла": "File name template",
+    "yyyy год, MM месяц, dd день, HH час, mm минуты, ss секунды": "yyyy year, MM month, dd day, HH hour, mm minutes, ss seconds",
+    "Уведомлять после сохранения": "Notify after saving",
+    "Сколько показывать": "Show for",
+    "Окно «Скриншот сохранён» появляется в правом нижнем углу и закрывается само. В игровом режиме уведомления не показываются.": "The \"Screenshot saved\" window appears in the bottom right corner and closes itself. Notifications are not shown in game mode.",
+    "Отслеживать сочетание клавиш Win + Shift + S": "Watch the Win + Shift + S shortcut",
+    "Сделать скриншот области": "Capture an area",
+    "Приложение ждёт, пока вы сделаете скриншот, и Windows поместит его в буфер обмена. Если выключить, сохраняется любая картинка из буфера.": "The app waits for you to take a screenshot and for Windows to put it on the clipboard. If turned off, any image that lands on the clipboard is saved.",
+    "Сборка: %s": "Build: %s",
+    "Проверить обновления": "Check for updates",
+    "Авторы": "Authors",
+    "Настройки хранятся в:\n%s": "Settings are stored in:\n%s",
+    "Укажи папку для сохранения.": "Choose a save folder.",
+    "Шаблон имени не может быть пустым.": "The name template cannot be empty.",
+    "Настройки сохранены": "Settings saved",
+    "Вышла новая версия": "A new version is out",
+    "Версия %s уже на GitHub": "Version %s is on GitHub",
+    "Нажмите, чтобы открыть страницу загрузки": "Click to open the download page",
+    "Не удалось проверить обновления": "Could not check for updates",
+    "Доступна версия %s. Открыть страницу загрузки": "Version %s is available. Open the download page",
+    "У вас последняя версия": "You have the latest version",
+    "Проверяю…": "Checking…",
+    "Обнаружен скриншот!": "Screenshot detected!",
+    "Сохранить изображение в папку\n%s?": "Save the image to the folder\n%s?",
+    "Не сохранять": "Don't save",
+    "Автоматически закроется через %d %s": "Closes automatically in %d %s",
+    "секунду": "second",
+    "секунды": "seconds",
+    "секунд": "seconds",
+    "Не удалось сохранить": "Could not save",
+    "Скриншот сохранён": "Screenshot saved",
+    "Файл: %s": "File: %s",
+    "Папка: %s": "Folder: %s",
+    "Сохранено %d %s": "Saved %d %s",
+    "скриншот": "screenshot",
+    "скриншота": "screenshots",
+    "скриншотов": "screenshots",
+    "Открыть окно": "Open window",
+    "Открыть папку": "Open folder",
+    "Режим: ": "Mode: ",
+    "Включить сохранение": "Resume saving",
+    "Приостановить сохранение": "Pause saving",
+    "Запускать с Windows": "Start with Windows",
+    "Выход": "Exit",
+    "Для игр": "Games",
+    "Скриншот для игр": "Game screenshot",
+    "Делать скриншот по клавише": "Capture on hotkey",
+    "Клавиша": "Hotkey",
+    "Отдельная папка для каждой игры": "Separate folder for each game",
+    "Звук при сохранении": "Sound when saved",
+    "Нажмите клавишу в игре, и экран сохранится сразу, без окон. Если вместо игры получается чёрный кадр, переведите игру в режим «Без рамки» или «В окне».": "Press the key in a game and the screen is saved at once, with no windows. If you get a black frame instead of the game, switch the game to borderless or windowed mode.",
+    "Скриншот игры сохранён": "Game screenshot saved",
+}
+
+
+def tr(s):
+    return EN.get(s, s) if LANG == "en" else s
+
+
+def parse_version(text):
+    return tuple(int(x) for x in re.findall(r"\d+", text)) or (0,)
+
+
+def fetch_latest(repo):
+    import urllib.request
+    req = urllib.request.Request("https://api.github.com/repos/%s/releases/latest" % repo,
+                                 headers={"User-Agent": APP, "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    return str(data.get("tag_name", "")), str(data.get("html_url", ""))
+
+
 def plural(n, a, b, c):
+    if LANG == "en":
+        return a if abs(n) == 1 else c
     m = abs(n) % 100
     d = m % 10
     if 10 < m < 20:
@@ -235,6 +390,10 @@ def already_running():
     return ctypes.windll.kernel32.GetLastError() == 183
 
 
+class MonitorInfo(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+
 SHELL_CLASSES = ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "ScreenClippingHost")
 SHELL_TITLES = ("Snipping Tool Overlay", "Program Manager")
 
@@ -255,9 +414,6 @@ def fullscreen_active():
     if title.value in SHELL_TITLES:
         return False
 
-    class MonitorInfo(ctypes.Structure):
-        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
-
     rect = wintypes.RECT()
     user.GetWindowRect(hwnd, ctypes.byref(rect))
     info = MonitorInfo()
@@ -266,6 +422,38 @@ def fullscreen_active():
         return False
     m = info.rcMonitor
     return rect.left <= m.left and rect.top <= m.top and rect.right >= m.right and rect.bottom >= m.bottom
+
+
+def foreground_info():
+    user = ctypes.windll.user32
+    kernel = ctypes.windll.kernel32
+    hwnd = user.GetForegroundWindow()
+    rect, name = None, ""
+    if not hwnd:
+        return rect, name
+    info = MonitorInfo()
+    info.cbSize = ctypes.sizeof(MonitorInfo)
+    if user.GetMonitorInfoW(user.MonitorFromWindow(hwnd, 2), ctypes.byref(info)):
+        m = info.rcMonitor
+        rect = (m.left, m.top, m.right, m.bottom)
+    pid = wintypes.DWORD()
+    user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    handle = kernel.OpenProcess(0x1000, False, pid.value)
+    if handle:
+        buf = ctypes.create_unicode_buffer(520)
+        size = wintypes.DWORD(520)
+        if kernel.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            name = Path(buf.value).stem
+        kernel.CloseHandle(handle)
+    return rect, name
+
+
+def game_folder(cfg, name):
+    base = Path(cfg["folder"])
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .")
+    if cfg["game_folders"] and safe and safe.lower() not in IGNORED_PROCS:
+        return base / "Games" / safe
+    return base
 
 
 def round_window(win, radius=16):
@@ -314,11 +502,19 @@ def load_gui():
     pystray, ImageTk = _ps, _it
 
 
-MODE_TITLES = {"auto": "Автоматически", "ask": "Спрашивать"}
-MODE_HINTS = {
-    "auto": "Скриншоты будут сохраняться сразу, без подтверждения.",
-    "ask": "Перед сохранением появится окно с вопросом.",
-}
+def mode_titles():
+    return {"auto": tr("Автоматически"), "ask": tr("Спрашивать")}
+
+
+def mode_hints():
+    return {
+        "auto": tr("Скриншоты будут сохраняться сразу, без подтверждения."),
+        "ask": tr("Перед сохранением появится окно с вопросом."),
+    }
+
+
+def toast_choices():
+    return {tr("3 секунды"): 3, tr("6 секунд"): 6, tr("10 секунд"): 10}
 
 
 def rr_points(w, h, r):
@@ -419,8 +615,15 @@ class Toggle(tk.Canvas):
         super().__init__(parent, width=self.W, height=self.H, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
         self.var = var
         self.bind("<Button-1>", lambda e: var.set(not var.get()))
-        var.trace_add("write", lambda *a: self.draw())
+        self.tid = var.trace_add("write", lambda *a: self.draw())
+        self.bind("<Destroy>", lambda e: self.release())
         self.draw()
+
+    def release(self):
+        try:
+            self.var.trace_remove("write", self.tid)
+        except Exception:
+            pass
 
     def draw(self):
         self.delete("all")
@@ -437,6 +640,7 @@ class Toggle(tk.Canvas):
 class ShotFile:
     def __init__(self):
         self.cfg = load_config()
+        set_lang(self.cfg)
         self.q = queue.Queue()
         self.running = True
         self.armed_until = 0.0
@@ -445,6 +649,10 @@ class ShotFile:
         self.last_time = 0.0
         self.in_game = False
         self.paused = False
+        self.update_info = None
+        self.update_announced = False
+        self.suppress_until = 0.0
+        self.game_hook = None
         self.game_saved = 0
         self.settings_win = None
         self.popup_win = None
@@ -484,6 +692,8 @@ class ShotFile:
         self.start_tray()
         threading.Thread(target=self.watch, daemon=True).start()
         self.root.after(100, self.pump)
+        if REPO and self.cfg["check_updates"]:
+            self.root.after(6000, self.check_updates)
 
     def place(self, win, w, h):
         win.update_idletasks()
@@ -534,7 +744,7 @@ class ShotFile:
         pad.pack(fill="both", expand=True, padx=34, pady=(22, 22))
         tk.Label(pad, image=self.logo, bg=BG).pack()
         tk.Label(pad, text=APP, bg=BG, fg=FG, font=(FONT, 28, "bold")).pack(pady=(10, 0))
-        tk.Label(pad, text="Скриншотнул — сохранил.", bg=BG, fg=ACCENT_SOFT, font=(FONT, 13)).pack(pady=(2, 22))
+        tk.Label(pad, text=tr("Скриншотнул — сохранил."), bg=BG, fg=ACCENT_SOFT, font=(FONT, 13)).pack(pady=(2, 22))
 
         st = Round(pad, radius=14, padx=10, pady=6)
         st.pack(fill="x")
@@ -542,7 +752,7 @@ class ShotFile:
         self.dot = tk.Canvas(sc, width=14, height=14, bg=PANEL, highlightthickness=0)
         self.dot_item = self.dot.create_oval(2, 2, 12, 12, fill=GOOD, outline=GOOD)
         self.dot.grid(row=0, column=0, rowspan=2, padx=(10, 12), pady=12)
-        self.status_title = tk.Label(sc, text="Работает в фоне", fg=FG, bg=PANEL, font=(FONT, 11), anchor="w")
+        self.status_title = tk.Label(sc, text=tr("Работает в фоне"), fg=FG, bg=PANEL, font=(FONT, 11), anchor="w")
         self.status_title.grid(row=0, column=1, sticky="w", pady=(10, 0))
         self.status_sub = tk.Label(sc, fg=MUTED, bg=PANEL, font=(FONT, 10), anchor="w")
         self.status_sub.grid(row=1, column=1, sticky="w", pady=(0, 10))
@@ -552,8 +762,8 @@ class ShotFile:
         rows = Round(pad, radius=14, padx=8, pady=6)
         rows.pack(fill="x", pady=16)
         self.vals = {}
-        items = [("mode", G_PASTE, "Режим сохранения"), ("folder", G_FOLDER, "Папка сохранения"),
-                 ("format", G_PHOTO, "Формат файлов"), ("template", G_PAGE, "Имя файла")]
+        items = [("mode", G_PASTE, tr("Режим сохранения")), ("folder", G_FOLDER, tr("Папка сохранения")),
+                 ("format", G_PHOTO, tr("Формат файлов")), ("template", G_PAGE, tr("Имя файла"))]
         for i, (key, glyph, label) in enumerate(items):
             row = tk.Frame(rows.inner, bg=PANEL, cursor="hand2")
             row.pack(fill="x")
@@ -578,18 +788,27 @@ class ShotFile:
         left = tk.Frame(bar, bg=BG, cursor="hand2")
         left.pack(side="left")
         icon_label(left, G_SETTINGS, BG, FG, 13).pack(side="left", padx=(0, 8))
-        tk.Label(left, text="Настройки", bg=BG, fg=FG, font=(FONT, 10)).pack(side="left")
+        tk.Label(left, text=tr("Настройки"), bg=BG, fg=FG, font=(FONT, 10)).pack(side="left")
         bind_tree(left, "<Button-1>", lambda e: self.open_settings("general"))
         right = tk.Frame(bar, bg=BG, cursor="hand2")
         right.pack(side="right")
         icon_label(right, G_HEART, BG, ACCENT_SOFT, 13).pack(side="left", padx=(0, 8))
-        tk.Label(right, text="Поддержать автора", bg=BG, fg=ACCENT_SOFT, font=(FONT, 10)).pack(side="left")
+        tk.Label(right, text=tr("Поддержать автора"), bg=BG, fg=ACCENT_SOFT, font=(FONT, 10)).pack(side="left")
         bind_tree(right, "<Button-1>", lambda e: self.support())
+        self.update_label = tk.Label(bar, bg=BG, fg=GOOD, font=(FONT, 10), cursor="hand2")
+        self.update_label.bind("<Button-1>", lambda e: self.open_update())
         self.refresh_main()
+
+    def rebuild_main(self):
+        for ch in self.root.winfo_children():
+            ch.destroy()
+        self.build_main(self.chrome(self.root, APP, self.hide_main, self.hide_main))
+        self.root.update_idletasks()
+        self.root.geometry("560x%d" % self.root.winfo_reqheight())
 
     def refresh_main(self):
         c = self.cfg
-        self.vals["mode"].config(text=MODE_TITLES.get(c["mode"], "Автоматически"))
+        self.vals["mode"].config(text=mode_titles().get(c["mode"], tr("Автоматически")))
         folder = str(c["folder"])
         parts = Path(folder).parts
         short = "/".join(parts[-2:]) if len(parts) > 2 else folder
@@ -598,15 +817,20 @@ class ShotFile:
         self.vals["template"].config(text=c["template"])
         color = WARN if self.paused else GOOD
         self.dot.itemconfig(self.dot_item, fill=color, outline=color)
-        self.status_title.config(text="Приостановлено" if self.paused else "Работает в фоне")
+        self.status_title.config(text=tr("Приостановлено") if self.paused else tr("Работает в фоне"))
         if self.paused:
-            self.status_sub.config(text="Скриншоты не сохраняются, пока вы не включите")
+            self.status_sub.config(text=tr("Скриншоты не сохраняются, пока вы не включите"))
         elif self.in_game:
-            self.status_sub.config(text="Игровой режим: сохраняю без окон и уведомлений")
+            self.status_sub.config(text=tr("Игровой режим: сохраняю без окон и уведомлений"))
         elif c["watch_hotkey"] and self.has_hotkey:
-            self.status_sub.config(text="Ожидает сочетание клавиш Win + Shift + S")
+            self.status_sub.config(text=tr("Ожидает сочетание клавиш Win + Shift + S"))
         else:
-            self.status_sub.config(text="Следит за буфером обмена")
+            self.status_sub.config(text=tr("Следит за буфером обмена"))
+        if self.update_info:
+            self.update_label.config(text=tr("Доступна версия %s") % self.update_info[0])
+            self.update_label.pack(side="left", padx=18)
+        else:
+            self.update_label.pack_forget()
 
     def field(self, parent, var, readonly=False, font=(FONT, 10)):
         box = Round(parent, fill=FIELD, outline=LINE, radius=10, padx=10, pady=7)
@@ -629,16 +853,16 @@ class ShotFile:
         self.support_win = d
         d.withdraw()
         d.overrideredirect(True)
-        body = self.chrome(d, "Поддержать автора", d.destroy)
+        body = self.chrome(d, tr("Поддержать автора"), d.destroy)
         wrap = tk.Frame(body, bg=BG)
         wrap.pack(fill="both", expand=True, padx=28, pady=(10, 26))
         top = tk.Frame(wrap, bg=BG)
         top.pack(fill="x")
         icon_label(top, G_HEART, BG, ACCENT_SOFT, 20).pack(side="left", padx=(0, 12))
-        tk.Label(top, text="Поддержать автора", bg=BG, fg=FG, font=(FONT, 16, "bold")).pack(side="left")
-        tk.Label(wrap, text="Если ShotFile вам пригодился, можно отправить любую сумму в TON. Это добровольно: программа работает полностью и без этого.",
+        tk.Label(top, text=tr("Поддержать автора"), bg=BG, fg=FG, font=(FONT, 16, "bold")).pack(side="left")
+        tk.Label(wrap, text=tr("Если ShotFile вам пригодился, можно отправить любую сумму в TON. Это добровольно: программа работает полностью и без этого."),
                  bg=BG, fg="#c5cde0", font=(FONT, 10), justify="left", anchor="w", wraplength=460).pack(fill="x", pady=(14, 18))
-        tk.Label(wrap, text="Адрес кошелька TON", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x", pady=(0, 6))
+        tk.Label(wrap, text=tr("Адрес кошелька TON"), bg=BG, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x", pady=(0, 6))
         var = tk.StringVar(master=d, value=TON_ADDRESS)
         self.field(wrap, var, readonly=True, font=("Consolas", 10)).pack(fill="x")
         btns = tk.Frame(wrap, bg=BG)
@@ -648,8 +872,8 @@ class ShotFile:
             self.root.clipboard_clear()
             self.root.clipboard_append(TON_ADDRESS)
             self.root.update()
-            cp.config(text="Скопировано")
-            d.after(2000, lambda: d.winfo_exists() and cp.config(text="Скопировать адрес"))
+            cp.config(text=tr("Скопировано"))
+            d.after(2000, lambda: d.winfo_exists() and cp.config(text=tr("Скопировать адрес")))
 
         def open_wallet():
             try:
@@ -658,10 +882,10 @@ class ShotFile:
                 import webbrowser
                 webbrowser.open("https://app.tonkeeper.com/transfer/" + TON_ADDRESS)
 
-        cp = button(btns, "Скопировать адрес", copy, primary=True, padx=20)
+        cp = button(btns, tr("Скопировать адрес"), copy, primary=True, padx=20)
         cp.pack(side="left")
-        button(btns, "Открыть в кошельке", open_wallet, padx=20).pack(side="left", padx=(10, 0))
-        tk.Label(wrap, text="Отправляйте только в сети TON (The Open Network).", bg=BG, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x", pady=(14, 0))
+        button(btns, tr("Открыть в кошельке"), open_wallet, padx=20).pack(side="left", padx=(10, 0))
+        tk.Label(wrap, text=tr("Отправляйте только в сети TON (The Open Network)."), bg=BG, fg=MUTED, font=(FONT, 9), anchor="w").pack(fill="x", pady=(14, 0))
         self.place(d, 540, None)
         appwindow(d)
 
@@ -686,12 +910,20 @@ class ShotFile:
             Path(self.cfg["folder"]).mkdir(parents=True, exist_ok=True)
             os.startfile(self.cfg["folder"])
         except Exception as e:
-            self.toast("Не удалось открыть папку", [str(e)])
+            self.toast(tr("Не удалось открыть папку"), [str(e)])
 
-    NAV = [("general", G_SETTINGS, "Основные"), ("save", G_FOLDER, "Сохранение"), ("mode", G_BOLT, "Режим работы"),
-           ("notify", G_BELL, "Уведомления"), ("keys", G_KEYS, "Горячие клавиши"), ("about", G_INFO, "О программе")]
+    def nav(self):
+        return [("general", G_SETTINGS, tr("Основные")),
+                ("save", G_FOLDER, tr("Сохранение")),
+                ("mode", G_BOLT, tr("Режим работы")),
+                ("notify", G_BELL, tr("Уведомления")),
+                ("game", G_GAME, tr("Для игр")),
+                ("keys", G_KEYS, tr("Горячие клавиши")),
+                ("about", G_INFO, tr("О программе"))]
+
     PAGES = {"general": ["general"], "save": ["save"], "mode": ["mode"],
-             "notify": ["notify"], "keys": ["keys"], "about": ["about"]}
+             "notify": ["notify"], "game": ["gamemode", "gameshot"],
+             "keys": ["keys"], "about": ["about"]}
 
     def open_settings(self, page="general"):
         if self.settings_win is not None and self.settings_win.winfo_exists():
@@ -704,18 +936,24 @@ class ShotFile:
         self.settings_win = w
         w.withdraw()
         w.overrideredirect(True)
-        body = self.chrome(w, APP + " — Настройки", w.destroy)
+        body = self.chrome(w, APP + tr(" — Настройки"), w.destroy)
         self.v = {
             "autostart": tk.BooleanVar(master=w, value=c["autostart"]),
             "start_minimized": tk.BooleanVar(master=w, value=c["start_minimized"]),
             "watch_hotkey": tk.BooleanVar(master=w, value=c["watch_hotkey"]),
             "game_mode": tk.BooleanVar(master=w, value=c["game_mode"]),
-            "mode": tk.StringVar(master=w, value=MODE_TITLES.get(c["mode"], "Автоматически")),
+            "check_updates": tk.BooleanVar(master=w, value=c["check_updates"]),
+            "game_shot": tk.BooleanVar(master=w, value=c["game_shot"]),
+            "game_key": tk.StringVar(master=w, value=next((k for k, x in GAME_KEYS.items() if x == c["game_key"]), "Print Screen")),
+            "game_folders": tk.BooleanVar(master=w, value=c["game_folders"]),
+            "game_sound": tk.BooleanVar(master=w, value=c["game_sound"]),
+            "lang": tk.StringVar(master=w, value=LANG_LABELS.get(c["lang"], LANG_LABELS["auto"])),
+            "mode": tk.StringVar(master=w, value=mode_titles().get(c["mode"], tr("Автоматически"))),
             "folder": tk.StringVar(master=w, value=c["folder"]),
             "format": tk.StringVar(master=w, value=str(c["format"]).upper()),
             "template": tk.StringVar(master=w, value=c["template"]),
             "notify": tk.BooleanVar(master=w, value=c["notify"]),
-            "toast": tk.StringVar(master=w, value=next((k for k, x in TOAST_CHOICES.items() if x == c["toast_seconds"]), "6 секунд")),
+            "toast": tk.StringVar(master=w, value=next((k for k, x in toast_choices().items() if x == c["toast_seconds"]), tr("6 секунд"))),
         }
         self.cur_page = page
 
@@ -725,7 +963,7 @@ class ShotFile:
         tk.Frame(body, bg=LINE, width=1).pack(side="left", fill="y")
         self.nav_items = {}
         tk.Frame(side, bg=BG_SIDE, height=10).pack()
-        for key, glyph, label in self.NAV:
+        for key, glyph, label in self.nav():
             it = Round(side, fill=BG_SIDE, outline=BG_SIDE, radius=10, padx=12, pady=9, bg=BG_SIDE)
             it.pack(fill="x", padx=10, pady=2)
             it.configure(cursor="hand2")
@@ -735,7 +973,7 @@ class ShotFile:
             bind_tree(it, "<Enter>", lambda e, k=key, r=it: self.cur_page != k and r.set_fill(BTN))
             bind_tree(it, "<Leave>", lambda e, k=key, r=it: self.cur_page != k and r.set_fill(BG_SIDE))
             self.nav_items[key] = it
-        tk.Label(side, text="Версия %s\nСборка %s" % (VERSION, BUILD), bg=BG_SIDE, fg=MUTED, font=(FONT, 9), justify="left", anchor="w").pack(side="bottom", anchor="w", padx=22, pady=18)
+        tk.Label(side, text=tr("Версия %s\nСборка %s") % (VERSION, BUILD), bg=BG_SIDE, fg=MUTED, font=(FONT, 9), justify="left", anchor="w").pack(side="bottom", anchor="w", padx=22, pady=18)
 
         main = tk.Frame(body, bg=BG)
         main.pack(side="left", fill="both", expand=True)
@@ -745,8 +983,8 @@ class ShotFile:
         self.s_err.pack(fill="x", padx=22)
         bar = tk.Frame(main, bg=BG)
         bar.pack(fill="x", padx=20, pady=(6, 18))
-        button(bar, "Сохранить", self.apply_settings, primary=True, padx=34).pack(side="right")
-        button(bar, "Отмена", w.destroy, padx=34).pack(side="right", padx=(0, 12))
+        button(bar, tr("Сохранить"), self.apply_settings, primary=True, padx=34).pack(side="right")
+        button(bar, tr("Отмена"), w.destroy, padx=34).pack(side="right", padx=(0, 12))
 
         self.secs = {}
         self.build_sections(self.s_content)
@@ -820,84 +1058,115 @@ class ShotFile:
 
     def build_sections(self, parent):
         v = self.v
-        g = self.section(parent, "general", "Основные")
-        self.toggle_row(g, G_AUTO, "Запускать вместе с Windows", v["autostart"])
-        self.toggle_row(g, G_TRAY, "Запускать свёрнутым в трей", v["start_minimized"])
-        self.toggle_row(g, G_GAME, "Игровой режим", v["game_mode"])
-        self.hint(g, "В полноэкранных играх скриншоты сохраняются молча, без окон и уведомлений. После игры покажется итог.", G_INFO)
+        g = self.section(parent, "general", tr("Основные"))
+        self.toggle_row(g, G_AUTO, tr("Запускать вместе с Windows"), v["autostart"])
+        self.toggle_row(g, G_TRAY, tr("Запускать свёрнутым в трей"), v["start_minimized"])
+        r6 = tk.Frame(g, bg=PANEL)
+        r6.pack(fill="x", pady=6)
+        icon_label(r6, G_LANG, PANEL, FG, 13).pack(side="left", padx=(0, 12))
+        tk.Label(r6, text=tr("Язык"), bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
+        lbox, _ = self.combo(r6, v["lang"], list(LANG_LABELS.values()))
+        lbox.pack(side="left", fill="x", expand=True)
+        if REPO:
+            self.toggle_row(g, G_SYNC, tr("Проверять обновления при запуске"), v["check_updates"])
 
-        m = self.section(parent, "mode", "Режим работы")
+        m = self.section(parent, "mode", tr("Режим работы"))
         row = tk.Frame(m, bg=PANEL)
         row.pack(fill="x", pady=(4, 0))
         icon_label(row, G_BOLT, PANEL, FG, 13).pack(side="left", padx=(0, 12))
-        box, cb = self.combo(row, v["mode"], list(MODE_TITLES.values()))
+        box, cb = self.combo(row, v["mode"], list(mode_titles().values()))
         box.pack(side="left", fill="x", expand=True)
         self.mode_hint = tk.Label(m, bg=PANEL, fg=MUTED, font=(FONT, 9), anchor="w")
         self.mode_hint.pack(fill="x", pady=(8, 4))
 
         def upd(*a):
-            key = "ask" if v["mode"].get() == MODE_TITLES["ask"] else "auto"
-            self.mode_hint.config(text=MODE_HINTS[key])
+            key = "ask" if v["mode"].get() == mode_titles()["ask"] else "auto"
+            self.mode_hint.config(text=mode_hints()[key])
 
         cb.bind("<<ComboboxSelected>>", upd)
         upd()
 
-        s = self.section(parent, "save", "Сохранение")
+        s = self.section(parent, "save", tr("Сохранение"))
         r1 = tk.Frame(s, bg=PANEL)
         r1.pack(fill="x", pady=6)
         icon_label(r1, G_FOLDER, PANEL, FG, 13).pack(side="left", padx=(0, 12))
-        tk.Label(r1, text="Папка сохранения", bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
+        tk.Label(r1, text=tr("Папка сохранения"), bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
 
         def choose():
             p = filedialog.askdirectory(parent=self.settings_win, initialdir=v["folder"].get() or str(Path.home()))
             if p:
                 v["folder"].set(os.path.normpath(p))
 
-        button(r1, "Выбрать", choose, padx=16, pady=6).pack(side="right", padx=(10, 0))
+        button(r1, tr("Выбрать"), choose, padx=16, pady=6).pack(side="right", padx=(10, 0))
         self.field(r1, v["folder"]).pack(side="left", fill="x", expand=True)
 
         r2 = tk.Frame(s, bg=PANEL)
         r2.pack(fill="x", pady=6)
         icon_label(r2, G_PHOTO, PANEL, FG, 13).pack(side="left", padx=(0, 12))
-        tk.Label(r2, text="Формат файлов", bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
+        tk.Label(r2, text=tr("Формат файлов"), bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
         fbox, _ = self.combo(r2, v["format"], ["PNG", "JPG"])
         fbox.pack(side="left", fill="x", expand=True)
 
         r3 = tk.Frame(s, bg=PANEL)
         r3.pack(fill="x", pady=6)
         icon_label(r3, G_PAGE, PANEL, FG, 13).pack(side="left", padx=(0, 12))
-        tk.Label(r3, text="Шаблон имени файла", bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
+        tk.Label(r3, text=tr("Шаблон имени файла"), bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
         self.field(r3, v["template"]).pack(side="left", fill="x", expand=True)
-        self.hint(s, "yyyy год, MM месяц, dd день, HH час, mm минуты, ss секунды", pady=(0, 4))
+        self.hint(s, tr("yyyy год, MM месяц, dd день, HH час, mm минуты, ss секунды"), pady=(0, 4))
 
-        n = self.section(parent, "notify", "Уведомления")
-        self.toggle_row(n, G_BELL, "Уведомлять после сохранения", v["notify"])
+        n = self.section(parent, "notify", tr("Уведомления"))
+        self.toggle_row(n, G_BELL, tr("Уведомлять после сохранения"), v["notify"])
         r4 = tk.Frame(n, bg=PANEL)
         r4.pack(fill="x", pady=6)
         icon_label(r4, G_CLOCK, PANEL, FG, 13).pack(side="left", padx=(0, 12))
-        tk.Label(r4, text="Сколько показывать", bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
-        nbox, _ = self.combo(r4, v["toast"], list(TOAST_CHOICES))
+        tk.Label(r4, text=tr("Сколько показывать"), bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
+        nbox, _ = self.combo(r4, v["toast"], list(toast_choices()))
         nbox.pack(side="left", fill="x", expand=True)
-        self.hint(n, "Окно «Скриншот сохранён» появляется в правом нижнем углу и закрывается само. В игровом режиме уведомления не показываются.", G_INFO, pady=(6, 4))
+        self.hint(n, tr("Окно «Скриншот сохранён» появляется в правом нижнем углу и закрывается само. В игровом режиме уведомления не показываются."), G_INFO, pady=(6, 4))
 
-        k = self.section(parent, "keys", "Горячие клавиши")
-        self.toggle_row(k, G_KEYS, "Отслеживать сочетание клавиш Win + Shift + S", v["watch_hotkey"])
+        gm = self.section(parent, "gamemode", tr("Игровой режим"))
+        self.toggle_row(gm, G_GAME, tr("Игровой режим"), v["game_mode"])
+        self.hint(gm, tr("В полноэкранных играх скриншоты сохраняются молча, без окон и уведомлений. После игры покажется итог."), G_INFO, pady=(4, 4))
+
+        gs = self.section(parent, "gameshot", tr("Скриншот для игр"))
+        self.toggle_row(gs, G_SHOT, tr("Делать скриншот по клавише"), v["game_shot"])
+        r7 = tk.Frame(gs, bg=PANEL)
+        r7.pack(fill="x", pady=6)
+        icon_label(r7, G_KEYS, PANEL, FG, 13).pack(side="left", padx=(0, 12))
+        tk.Label(r7, text=tr("Клавиша"), bg=PANEL, fg=FG, font=(FONT, 10), width=18, anchor="w").pack(side="left")
+        kbox, _ = self.combo(r7, v["game_key"], list(GAME_KEYS))
+        kbox.pack(side="left", fill="x", expand=True)
+        self.toggle_row(gs, G_FOLDER, tr("Отдельная папка для каждой игры"), v["game_folders"])
+        self.toggle_row(gs, G_SOUND, tr("Звук при сохранении"), v["game_sound"])
+        self.hint(gs, tr("Нажмите клавишу в игре, и экран сохранится сразу, без окон. Если вместо игры получается чёрный кадр, переведите игру в режим «Без рамки» или «В окне»."), G_INFO, pady=(4, 4))
+
+        k = self.section(parent, "keys", tr("Горячие клавиши"))
+        self.toggle_row(k, G_KEYS, tr("Отслеживать сочетание клавиш Win + Shift + S"), v["watch_hotkey"])
         r5 = tk.Frame(k, bg=PANEL)
         r5.pack(fill="x", pady=8)
-        tk.Label(r5, text="Сделать скриншот области", bg=PANEL, fg=FG, font=(FONT, 10)).pack(side="left", padx=(30, 0))
+        tk.Label(r5, text=tr("Сделать скриншот области"), bg=PANEL, fg=FG, font=(FONT, 10)).pack(side="left", padx=(30, 0))
         self.keycaps(r5, ["Win", "Shift", "S"]).pack(side="right")
-        self.hint(k, "Приложение ждёт, пока вы сделаете скриншот, и Windows поместит его в буфер обмена. Если выключить, сохраняется любая картинка из буфера.", G_INFO, pady=(4, 4))
+        self.hint(k, tr("Приложение ждёт, пока вы сделаете скриншот, и Windows поместит его в буфер обмена. Если выключить, сохраняется любая картинка из буфера."), G_INFO, pady=(4, 4))
 
-        a = self.section(parent, "about", "О программе")
+        a = self.section(parent, "about", tr("О программе"))
         tk.Label(a, text="%s %s" % (APP, VERSION), bg=PANEL, fg=FG, font=(FONT, 14, "bold"), anchor="w").pack(fill="x", pady=(6, 0))
-        tk.Label(a, text="Сборка: %s" % BUILD, bg=PANEL, fg=ACCENT_SOFT, font=(FONT, 10), anchor="w").pack(fill="x", pady=(4, 0))
-        tk.Label(a, text="Скриншотнул — сохранил.", bg=PANEL, fg=MUTED, font=(FONT, 10), anchor="w").pack(fill="x", pady=(8, 0))
+        tk.Label(a, text=tr("Сборка: %s") % BUILD, bg=PANEL, fg=ACCENT_SOFT, font=(FONT, 10), anchor="w").pack(fill="x", pady=(4, 0))
+        tk.Label(a, text=tr("Скриншотнул — сохранил."), bg=PANEL, fg=MUTED, font=(FONT, 10), anchor="w").pack(fill="x", pady=(8, 0))
+        if REPO:
+            ur = tk.Frame(a, bg=PANEL)
+            ur.pack(fill="x", pady=(14, 0))
+            button(ur, tr("Проверить обновления"), self.manual_check, padx=16, pady=6).pack(side="left")
+            self.upd_status = tk.Label(ur, text="", bg=PANEL, fg=MUTED, font=(FONT, 10), anchor="w")
+            self.upd_status.pack(side="left", padx=14)
+            self.upd_status.bind("<Button-1>", lambda e: self.open_update())
+            if self.update_info:
+                self.show_update_status(True, True)
         tk.Frame(a, bg=LINE, height=1).pack(fill="x", pady=(12, 10))
-        tk.Label(a, text="Авторы", bg=PANEL, fg=FG, font=(FONT, 11, "bold"), anchor="w").pack(fill="x", pady=(0, 4))
+        tk.Label(a, text=tr("Авторы"), bg=PANEL, fg=FG, font=(FONT, 11, "bold"), anchor="w").pack(fill="x", pady=(0, 4))
         for h in AUTHORS:
             self.author_row(a, h)
         tk.Frame(a, bg=LINE, height=1).pack(fill="x", pady=(10, 8))
-        tk.Label(a, text="Настройки хранятся в:\n%s" % CONFIG_PATH, bg=PANEL, fg=MUTED, font=(FONT, 9), justify="left", anchor="w", wraplength=520).pack(fill="x", pady=(0, 6))
+        tk.Label(a, text=tr("Настройки хранятся в:\n%s") % CONFIG_PATH, bg=PANEL, fg=MUTED, font=(FONT, 9), justify="left", anchor="w", wraplength=520).pack(fill="x", pady=(0, 6))
 
     def settings_show(self, page):
         self.cur_page = page
@@ -912,30 +1181,41 @@ class ShotFile:
         c, v = self.cfg, self.v
         folder = v["folder"].get().strip()
         if not folder:
-            self.s_err.config(text="Укажи папку для сохранения.")
+            self.s_err.config(text=tr("Укажи папку для сохранения."))
             return
         if not v["template"].get().strip():
-            self.s_err.config(text="Шаблон имени не может быть пустым.")
+            self.s_err.config(text=tr("Шаблон имени не может быть пустым."))
             return
         c["autostart"] = bool(v["autostart"].get())
         c["start_minimized"] = bool(v["start_minimized"].get())
         c["watch_hotkey"] = bool(v["watch_hotkey"].get())
         c["game_mode"] = bool(v["game_mode"].get())
-        c["mode"] = "ask" if v["mode"].get() == MODE_TITLES["ask"] else "auto"
+        c["game_shot"] = bool(v["game_shot"].get())
+        c["game_key"] = GAME_KEYS.get(v["game_key"].get(), "print screen")
+        c["game_folders"] = bool(v["game_folders"].get())
+        c["game_sound"] = bool(v["game_sound"].get())
+        c["mode"] = "ask" if v["mode"].get() == mode_titles()["ask"] else "auto"
         c["folder"] = folder
         c["format"] = v["format"].get()
         c["template"] = v["template"].get().strip()
         c["notify"] = bool(v["notify"].get())
-        c["toast_seconds"] = TOAST_CHOICES.get(v["toast"].get(), 6)
+        c["toast_seconds"] = toast_choices().get(v["toast"].get(), 6)
+        c["check_updates"] = bool(v["check_updates"].get())
+        c["lang"] = next((k for k, x in LANG_LABELS.items() if x == v["lang"].get()), "auto")
         save_config(c)
         set_autostart(c["autostart"])
+        self.register_game_hotkey()
+        old_lang = LANG
+        set_lang(c)
+        if LANG != old_lang:
+            self.rebuild_main()
         self.refresh_main()
         try:
             self.tray.update_menu()
         except Exception:
             pass
         self.settings_win.destroy()
-        self.toast("Настройки сохранены", [], seconds=2)
+        self.toast(tr("Настройки сохранены"), [], seconds=2)
 
     def shell(self, title="ShotFile"):
         d = tk.Toplevel(self.root)
@@ -964,7 +1244,57 @@ class ShotFile:
         round_window(d, 14)
         d.deiconify()
 
-    def toast(self, title, lines, thumb=None, seconds=6):
+    def open_update(self):
+        if self.update_info:
+            import webbrowser
+            webbrowser.open(self.update_info[1])
+
+    def check_updates(self, manual=False):
+        if not REPO:
+            return
+
+        def work():
+            try:
+                tag, url = fetch_latest(REPO)
+                ok = True
+            except Exception:
+                tag, url, ok = "", "", False
+            self.q.put(lambda: self.on_update_result(ok, tag, url, manual))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_update_result(self, ok, tag, url, manual):
+        newer = ok and parse_version(tag) > parse_version(VERSION)
+        if newer:
+            self.update_info = (tag.lstrip("vV"), url or "https://github.com/%s/releases" % REPO)
+        elif ok:
+            self.update_info = None
+        self.refresh_main()
+        if newer and not manual and not self.update_announced and not self.in_game:
+            self.update_announced = True
+            self.toast(tr("Вышла новая версия"), [tr("Версия %s уже на GitHub") % self.update_info[0], tr("Нажмите, чтобы открыть страницу загрузки")],
+                       seconds=10, link=self.update_info[1])
+        self.show_update_status(ok, newer)
+
+    def show_update_status(self, ok, newer):
+        lab = getattr(self, "upd_status", None)
+        try:
+            if lab is None or not lab.winfo_exists():
+                return
+        except Exception:
+            return
+        if not ok:
+            lab.config(text=tr("Не удалось проверить обновления"), fg=MUTED, cursor="")
+        elif newer:
+            lab.config(text=tr("Доступна версия %s. Открыть страницу загрузки") % self.update_info[0], fg=GOOD, cursor="hand2")
+        else:
+            lab.config(text=tr("У вас последняя версия"), fg=MUTED, cursor="")
+
+    def manual_check(self):
+        self.upd_status.config(text=tr("Проверяю…"), fg=MUTED, cursor="")
+        self.check_updates(manual=True)
+
+    def toast(self, title, lines, thumb=None, seconds=6, link=None):
         if self.toast_win is not None and self.toast_win.winfo_exists():
             self.toast_win.destroy()
         d, card, body, x = self.shell()
@@ -979,6 +1309,13 @@ class ShotFile:
         tk.Label(txt, text=title, bg=BG, fg=FG, font=(FONT, 11, "bold"), anchor="w").pack(fill="x")
         for ln in lines:
             tk.Label(txt, text=ln, bg=BG, fg="#c5cde0", font=(FONT, 9), anchor="w", justify="left").pack(fill="x", pady=(3, 0))
+        if link:
+            def go(e):
+                import webbrowser
+                webbrowser.open(link)
+                d.destroy()
+            bind_tree(txt, "<Button-1>", go)
+            txt.configure(cursor="hand2")
         x.bind("<Button-1>", lambda e: d.destroy())
         self.dock(d)
         d.after(int(seconds * 1000), lambda: d.winfo_exists() and d.destroy())
@@ -994,8 +1331,8 @@ class ShotFile:
         tk.Label(body, image=d.ph, bg=BG).pack(side="left", padx=(0, 18), anchor="n")
         right = tk.Frame(body, bg=BG)
         right.pack(side="left", anchor="n")
-        tk.Label(right, text="Обнаружен скриншот!", bg=BG, fg=FG, font=(FONT, 14), anchor="w").pack(fill="x")
-        tk.Label(right, text="Сохранить изображение в папку\n%s?" % "/".join(Path(self.cfg["folder"]).parts[-2:]), bg=BG, fg="#c5cde0",
+        tk.Label(right, text=tr("Обнаружен скриншот!"), bg=BG, fg=FG, font=(FONT, 14), anchor="w").pack(fill="x")
+        tk.Label(right, text=tr("Сохранить изображение в папку\n%s?") % "/".join(Path(self.cfg["folder"]).parts[-2:]), bg=BG, fg="#c5cde0",
                  font=(FONT, 10), justify="left", anchor="w").pack(fill="x", pady=(8, 14))
         btns = tk.Frame(right, bg=BG)
         btns.pack(fill="x")
@@ -1015,8 +1352,8 @@ class ShotFile:
             if save:
                 self.save_and_notify(img)
 
-        button(btns, "Сохранить", lambda: finish(True), primary=True, padx=20, pady=7).pack(side="left")
-        button(btns, "Не сохранять", lambda: finish(False), padx=20, pady=7).pack(side="left", padx=(10, 0))
+        button(btns, tr("Сохранить"), lambda: finish(True), primary=True, padx=20, pady=7).pack(side="left")
+        button(btns, tr("Не сохранять"), lambda: finish(False), padx=20, pady=7).pack(side="left", padx=(10, 0))
         x.bind("<Button-1>", lambda e: finish(False))
 
         def tick():
@@ -1026,7 +1363,7 @@ class ShotFile:
                 finish(False)
                 return
             n = state["left"]
-            timer.config(text="Автоматически закроется через %d %s" % (n, plural(n, "секунду", "секунды", "секунд")))
+            timer.config(text=tr("Автоматически закроется через %d %s") % (n, plural(n, tr("секунду"), tr("секунды"), tr("секунд"))))
             state["left"] -= 1
             d.after(1000, tick)
 
@@ -1037,10 +1374,10 @@ class ShotFile:
         try:
             path = save_image(img, self.cfg)
         except Exception as e:
-            self.toast("Не удалось сохранить", [str(e)])
+            self.toast(tr("Не удалось сохранить"), [str(e)])
             return
         if self.cfg["notify"]:
-            self.toast("Скриншот сохранён", ["Файл: %s" % path.name, "Папка: %s" % "/".join(path.parent.parts[-2:])], thumb=img, seconds=self.cfg["toast_seconds"])
+            self.toast(tr("Скриншот сохранён"), [tr("Файл: %s") % path.name, tr("Папка: %s") % "/".join(path.parent.parts[-2:])], thumb=img, seconds=self.cfg["toast_seconds"])
 
     def save_silent(self, img):
         try:
@@ -1062,8 +1399,8 @@ class ShotFile:
         if not self.in_game and self.game_saved:
             n = self.game_saved
             self.game_saved = 0
-            self.toast("Игровой режим", ["Сохранено %d %s" % (n, plural(n, "скриншот", "скриншота", "скриншотов")),
-                                         "Папка: %s" % "/".join(Path(self.cfg["folder"]).parts[-2:])])
+            self.toast(tr("Игровой режим"), [tr("Сохранено %d %s") % (n, plural(n, tr("скриншот"), tr("скриншота"), tr("скриншотов"))),
+                                         tr("Папка: %s") % "/".join(Path(self.cfg["folder"]).parts[-2:])])
 
     def start_hotkey(self):
         try:
@@ -1072,10 +1409,59 @@ class ShotFile:
             self.has_hotkey = True
         except Exception:
             self.has_hotkey = False
+        self.register_game_hotkey()
         self.refresh_main()
 
     def arm(self):
         self.armed_until = time.time() + 60
+
+    def register_game_hotkey(self):
+        try:
+            import keyboard
+        except Exception:
+            return
+        if self.game_hook is not None:
+            try:
+                keyboard.remove_hotkey(self.game_hook)
+            except Exception:
+                pass
+            self.game_hook = None
+        if self.cfg["game_shot"]:
+            try:
+                self.game_hook = keyboard.add_hotkey(self.cfg["game_key"], self.game_shot)
+            except Exception:
+                self.game_hook = None
+
+    def game_shot(self):
+        if self.paused or not self.cfg["game_shot"]:
+            return
+        self.suppress_until = time.time() + 2.5
+        threading.Thread(target=self.game_shot_work, daemon=True).start()
+
+    def game_shot_work(self):
+        try:
+            from PIL import ImageGrab
+            rect, name = foreground_info()
+            img = ImageGrab.grab(bbox=rect, all_screens=True) if rect else ImageGrab.grab()
+            path = save_image(img, dict(self.cfg, folder=str(game_folder(self.cfg, name))))
+        except Exception as e:
+            err = str(e)
+            self.q.put(lambda: self.toast(tr("Не удалось сохранить"), [err]) if not self.in_game else None)
+            return
+        if self.cfg["game_sound"]:
+            try:
+                import winsound
+                winsound.Beep(1200, 60)
+            except Exception:
+                pass
+        self.q.put(lambda: self.on_game_shot(path, img))
+
+    def on_game_shot(self, path, img):
+        if self.in_game and self.cfg["game_mode"]:
+            self.game_saved += 1
+        elif self.cfg["notify"]:
+            self.toast(tr("Скриншот игры сохранён"), [tr("Файл: %s") % path.name, tr("Папка: %s") % "/".join(path.parent.parts[-2:])],
+                       thumb=img, seconds=self.cfg["toast_seconds"])
 
     def watch(self):
         try:
@@ -1108,7 +1494,7 @@ class ShotFile:
             if seq == last:
                 continue
             last = seq
-            if self.paused:
+            if self.paused or time.time() < self.suppress_until:
                 continue
             if self.cfg["watch_hotkey"] and self.has_hotkey and time.time() > self.armed_until:
                 continue
@@ -1148,21 +1534,27 @@ class ShotFile:
             self.cfg["game_mode"] = not self.cfg["game_mode"]
             save_config(self.cfg)
 
+        def toggle_gameshot(icon, item):
+            self.cfg["game_shot"] = not self.cfg["game_shot"]
+            save_config(self.cfg)
+            self.q.put(self.register_game_hotkey)
+
         menu = M(
-            I("Открыть окно", ui(self.show_main), default=True),
-            I("Открыть папку", ui(self.open_folder)),
-            I("Настройки", ui(self.open_settings)),
+            I(lambda item: tr("Открыть окно"), ui(self.show_main), default=True),
+            I(lambda item: tr("Открыть папку"), ui(self.open_folder)),
+            I(lambda item: tr("Настройки"), ui(self.open_settings)),
             M.SEPARATOR,
-            I(lambda item: "Режим: " + MODE_TITLES.get(self.cfg["mode"], "Автоматически"), M(
-                I("Автоматически", set_mode("auto"), checked=lambda item: self.cfg["mode"] == "auto", radio=True),
-                I("Спрашивать", set_mode("ask"), checked=lambda item: self.cfg["mode"] == "ask", radio=True),
+            I(lambda item: tr("Режим: ") + mode_titles().get(self.cfg["mode"], tr("Автоматически")), M(
+                I(lambda item: tr("Автоматически"), set_mode("auto"), checked=lambda item: self.cfg["mode"] == "auto", radio=True),
+                I(lambda item: tr("Спрашивать"), set_mode("ask"), checked=lambda item: self.cfg["mode"] == "ask", radio=True),
             )),
-            I(lambda item: "Включить сохранение" if self.paused else "Приостановить сохранение", toggle_pause),
-            I("Игровой режим", toggle_game, checked=lambda item: self.cfg["game_mode"]),
-            I("Запускать с Windows", toggle_autostart, checked=lambda item: self.cfg["autostart"]),
+            I(lambda item: tr("Включить сохранение") if self.paused else tr("Приостановить сохранение"), toggle_pause),
+            I(lambda item: tr("Игровой режим"), toggle_game, checked=lambda item: self.cfg["game_mode"]),
+            I(lambda item: tr("Скриншот для игр"), toggle_gameshot, checked=lambda item: self.cfg["game_shot"]),
+            I(lambda item: tr("Запускать с Windows"), toggle_autostart, checked=lambda item: self.cfg["autostart"]),
             M.SEPARATOR,
-            I("О программе", ui(lambda: self.open_settings("about"))),
-            I("Выход", ui(self.quit)),
+            I(lambda item: tr("О программе"), ui(lambda: self.open_settings("about"))),
+            I(lambda item: tr("Выход"), ui(self.quit)),
         )
         self.tray = pystray.Icon(APP, self.tray_img, APP, menu)
         self.tray.run_detached()
