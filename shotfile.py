@@ -27,6 +27,8 @@ except ImportError:
 APP = "ShotFile"
 VERSION = "1.2"
 AUTHORS = ("dimzoffc", "yorvex")
+VK = {"win": (0x5B, 0x5C), "shift": (0x10,), "ctrl": (0x11,), "s": (0x53,), "print screen": (0x2C,),
+      "f8": (0x77,), "f9": (0x78,), "f10": (0x79,), "f12": (0x7B,)}
 GAME_KEYS = {"Print Screen": "print screen", "F8": "f8", "F9": "f9", "F10": "f10",
              "Ctrl + F12": "ctrl+f12", "Ctrl + Shift + S": "ctrl+shift+s"}
 IGNORED_PROCS = ("explorer", "shotfile", "python", "pythonw", "applicationframehost", "searchhost", "shellexperiencehost")
@@ -424,6 +426,14 @@ def fullscreen_active():
     return rect.left <= m.left and rect.top <= m.top and rect.right >= m.right and rect.bottom >= m.bottom
 
 
+def key_state(vk):
+    return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+def combo_down(combo):
+    return all(any(key_state(k) for k in VK[p.strip()]) for p in combo.split("+"))
+
+
 def foreground_info():
     user = ctypes.windll.user32
     kernel = ctypes.windll.kernel32
@@ -652,7 +662,6 @@ class ShotFile:
         self.update_info = None
         self.update_announced = False
         self.suppress_until = 0.0
-        self.game_hook = None
         self.game_saved = 0
         self.settings_win = None
         self.popup_win = None
@@ -1204,7 +1213,6 @@ class ShotFile:
         c["lang"] = next((k for k, x in LANG_LABELS.items() if x == v["lang"].get()), "auto")
         save_config(c)
         set_autostart(c["autostart"])
-        self.register_game_hotkey()
         old_lang = LANG
         set_lang(c)
         if LANG != old_lang:
@@ -1403,34 +1411,27 @@ class ShotFile:
                                          tr("Папка: %s") % "/".join(Path(self.cfg["folder"]).parts[-2:])])
 
     def start_hotkey(self):
-        try:
-            import keyboard
-            keyboard.add_hotkey("windows+shift+s", self.arm)
-            self.has_hotkey = True
-        except Exception:
-            self.has_hotkey = False
-        self.register_game_hotkey()
+        self.has_hotkey = True
+        threading.Thread(target=self.keys_loop, daemon=True).start()
         self.refresh_main()
+
+    def keys_loop(self):
+        was_area = was_game = False
+        while self.running:
+            time.sleep(0.03)
+            try:
+                area = combo_down("win+shift+s")
+                game = bool(self.cfg["game_shot"]) and combo_down(self.cfg["game_key"])
+            except Exception:
+                continue
+            if area and not was_area:
+                self.arm()
+            if game and not was_game:
+                self.game_shot()
+            was_area, was_game = area, game
 
     def arm(self):
         self.armed_until = time.time() + 60
-
-    def register_game_hotkey(self):
-        try:
-            import keyboard
-        except Exception:
-            return
-        if self.game_hook is not None:
-            try:
-                keyboard.remove_hotkey(self.game_hook)
-            except Exception:
-                pass
-            self.game_hook = None
-        if self.cfg["game_shot"]:
-            try:
-                self.game_hook = keyboard.add_hotkey(self.cfg["game_key"], self.game_shot)
-            except Exception:
-                self.game_hook = None
 
     def game_shot(self):
         if self.paused or not self.cfg["game_shot"]:
@@ -1537,7 +1538,6 @@ class ShotFile:
         def toggle_gameshot(icon, item):
             self.cfg["game_shot"] = not self.cfg["game_shot"]
             save_config(self.cfg)
-            self.q.put(self.register_game_hotkey)
 
         menu = M(
             I(lambda item: tr("Открыть окно"), ui(self.show_main), default=True),
