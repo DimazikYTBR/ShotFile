@@ -18,13 +18,16 @@ jobs:
       - run: pip install -r requirements.txt pyinstaller
       - shell: python
         run: |
-          import os, datetime
+          import os, re, datetime
+          version = re.search(r'VERSION = "([^"]+)"', open("shotfile.py", encoding="utf-8").read()).group(1)
           stamp = "%s (%s)" % (os.environ["GITHUB_RUN_NUMBER"], datetime.date.today().strftime("%d.%m.%Y"))
-          open("build_info.py", "w").write("BUILD = %r\n" % stamp)
+          open("build_info.py", "w").write("BUILD = %r\nREPO = %r\n" % (stamp, os.environ["GITHUB_REPOSITORY"]))
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write("APP_VERSION=%s\n" % version)
       - run: python shotfile.py --make-icon
       - run: pyinstaller --noconfirm --onefile --windowed --hidden-import pystray._win32 --name ShotFile --icon icon.ico shotfile.py
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: ShotFile
+          tag_name: v${{ env.APP_VERSION }}
+          name: ShotFile ${{ env.APP_VERSION }}
           files: dist/ShotFile.exe
